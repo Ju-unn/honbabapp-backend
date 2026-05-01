@@ -1,4 +1,0 @@
-export AWS_ACCESS_KEY_ID=AKIAYCUP6PATG4TSOP4P
-export AWS_SECRET_ACCESS_KEY=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
-export AWS_REGION=ap-northeast-2
-export S3_BUCKET=honbabapp-images

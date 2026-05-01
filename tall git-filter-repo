@@ -1,0 +1,91 @@
+[33mcommit e99fb117c3c232b192fb0f0c085068c24b37791d[m
+Author: Ju-unn <s4538@naver.com>
+Date:   Fri Dec 19 09:45:32 2025 +0900
+
+    ?몄쬆 API 諛??ㅼ젙 ?뚯씪 ?낅뜲?댄듃
+
+[1mdiff --git a/api/config/database.php b/api/config/database.php[m
+[1mindex 1b80719..987c3fd 100644[m
+[1m--- a/api/config/database.php[m
+[1m+++ b/api/config/database.php[m
+[36m@@ -6,7 +6,7 @@[m [mheader('Access-Control-Allow-Headers: Content-Type');[m
+ [m
+ class Database {[m
+   private $host = 'localhost';[m
+[31m-  private $db_name = 'honbabapp';[m
+[32m+[m[32m  private $db_name = 'honbab_db';[m
+   private $username = 'root';[m
+   private $password = 'sese3210*';[m
+   public $conn;[m
+[36m@@ -22,10 +22,9 @@[m [mclass Database {[m
+       );[m
+       $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);[m
+     } catch(PDOException $e) {[m
+[31m-      echo json_encode([[m
+[31m-        'success' => false,[m
+[31m-        'message' => '데이터베이스 연결 실패: ' . $e->getMessage()[m
+[31m-      ]);[m
+[32m+[m[32m      // 연결 실패 시 null 반환 (에러는 호출하는 쪽에서 처리)[m
+[32m+[m[32m      error_log('데이터베이스 연결 실패: ' . $e->getMessage());[m
+[32m+[m[32m      $this->conn = null;[m
+     }[m
+ [m
+     return $this->conn;[m
+
+[33mcommit ffcab301c3aed06792c3e8edc29637a252ecbac4[m
+Author: Ju-unn <s4538@naver.com>
+Date:   Sun Dec 14 08:15:01 2025 +0900
+
+    Add authentication features: phone verification, nickname check, and update existing files
+
+[1mdiff --git a/api/config/database.php b/api/config/database.php[m
+[1mindex e69de29..1b80719 100644[m
+[1m--- a/api/config/database.php[m
+[1m+++ b/api/config/database.php[m
+[36m@@ -0,0 +1,35 @@[m
+[32m+[m[32m<?php[m
+[32m+[m[32mheader('Content-Type: application/json; charset=utf-8');[m
+[32m+[m[32mheader('Access-Control-Allow-Origin: *');[m
+[32m+[m[32mheader('Access-Control-Allow-Methods: GET, POST, PUT, DELETE');[m
+[32m+[m[32mheader('Access-Control-Allow-Headers: Content-Type');[m
+[32m+[m
+[32m+[m[32mclass Database {[m
+[32m+[m[32m  private $host = 'localhost';[m
+[32m+[m[32m  private $db_name = 'honbabapp';[m
+[32m+[m[32m  private $username = 'root';[m
+[32m+[m[32m  private $password = 'sese3210*';[m
+[32m+[m[32m  public $conn;[m
+[32m+[m
+[32m+[m[32m  public function getConnection() {[m
+[32m+[m[32m    $this->conn = null;[m
+[32m+[m
+[32m+[m[32m    try {[m
+[32m+[m[32m      $this->conn = new PDO([m
+[32m+[m[32m        "mysql:host=" . $this->host . ";dbname=" . $this->db_name . ";charset=utf8",[m
+[32m+[m[32m        $this->username,[m
+[32m+[m[32m        $this->password[m
+[32m+[m[32m      );[m
+[32m+[m[32m      $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);[m
+[32m+[m[32m    } catch(PDOException $e) {[m
+[32m+[m[32m      echo json_encode([[m
+[32m+[m[32m        'success' => false,[m
+[32m+[m[32m        'message' => '데이터베이스 연결 실패: ' . $e->getMessage()[m
+[32m+[m[32m      ]);[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    return $this->conn;[m
+[32m+[m[32m  }[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m?>[m
+\ No newline at end of file[m
+
+[33mcommit 285c2cff67dff5fcd8c491d8f99c3f6e55a36723[m
+Author: Ju-unn <s4538@naver.com>
+Date:   Sun Dec 14 06:46:23 2025 +0900
+
+    created file
+
+[1mdiff --git a/api/config/database.php b/api/config/database.php[m
+[1mnew file mode 100644[m
+[1mindex 0000000..e69de29[m

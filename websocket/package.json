@@ -1,0 +1,14 @@
+{
+  "name": "honbabapp-websocket",
+  "version": "1.0.0",
+  "description": "혼밥 모여 WebSocket 서버",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "socket.io": "^4.7.2",
+    "mysql2": "^3.6.0",
+    "dotenv": "^16.3.1"
+  }
+}

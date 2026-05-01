@@ -49,15 +49,19 @@ try {
     $marked_count = 0;
 
     if (!empty($message_ids)) {
-        // chat_message_reads에 INSERT IGNORE (이미 읽은 건 건너뜀)
-        $stmt2 = $db->prepare("
-            INSERT IGNORE INTO chat_message_reads (message_id, user_id, read_at)
-            VALUES (?, ?, NOW())
-        ");
-        foreach ($message_ids as $message_id) {
-            $stmt2->execute([$message_id, $user_id]);
-            $marked_count += $stmt2->rowCount();
+        // 배치 INSERT — 메시지 N개를 쿼리 1번으로 처리
+        // 기존: foreach로 N번 execute → 변경: VALUES (?,?),(?,?)... 한 번에 실행
+        $placeholders = implode(',', array_fill(0, count($message_ids), '(?, ?, NOW())'));
+        $params = [];
+        foreach ($message_ids as $id) {
+            $params[] = intval($id);
+            $params[] = $user_id;
         }
+        $stmt2 = $db->prepare(
+            "INSERT IGNORE INTO chat_message_reads (message_id, user_id, read_at) VALUES $placeholders"
+        );
+        $stmt2->execute($params);
+        $marked_count = $stmt2->rowCount();
     }
 
     // last_read_at 업데이트

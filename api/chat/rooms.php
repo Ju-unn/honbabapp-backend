@@ -45,25 +45,36 @@ try {
     $stmt->execute([':uid1' => $user_id, ':uid2' => $user_id]);
     $rooms = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // 각 방의 참여자 목록 조회
-    foreach ($rooms as &$room) {
-        $stmt2 = $db->prepare("
-            SELECT u.user_id, u.user_nickname, u.user_profile_image, crm.last_read_at
+    if (!empty($rooms)) {
+        // 방 ID 목록 추출
+        $roomIds = array_column($rooms, 'room_id');
+        $inClause = implode(',', array_map('intval', $roomIds));
+
+        // 변경: IN절로 전체 참여자 한 번에 조회 후 PHP에서 그룹핑
+        $stmt2 = $db->query("
+            SELECT crm.room_id, u.user_id, u.user_nickname, u.user_profile_image, crm.last_read_at
             FROM chat_room_members crm
             INNER JOIN users u ON crm.user_id = u.user_id
-            WHERE crm.room_id = ?
+            WHERE crm.room_id IN ($inClause)
         ");
-        $stmt2->execute([$room['room_id']]);
-        $room['participants'] = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+        $allParticipants = $stmt2->fetchAll(PDO::FETCH_ASSOC);
 
-        // 숫자 타입 변환
-        $room['room_id'] = intval($room['room_id']);
-        $room['owner_id'] = intval($room['owner_id']);
-        $room['unread_count'] = intval($room['unread_count']);
-        $room['meeting_id'] = $room['meeting_id'] ? intval($room['meeting_id']) : null;
+        // room_id 기준으로 그룹핑
+        $participantsMap = [];
+        foreach ($allParticipants as $p) {
+            $participantsMap[$p['room_id']][] = $p;
+        }
+
+        // rooms에 참여자 매핑 + 숫자 타입 변환
+        foreach ($rooms as &$room) {
+            $room['participants'] = $participantsMap[$room['room_id']] ?? [];
+            $room['room_id']      = intval($room['room_id']);
+            $room['owner_id']     = intval($room['owner_id']);
+            $room['unread_count'] = intval($room['unread_count']);
+            $room['meeting_id']   = $room['meeting_id'] ? intval($room['meeting_id']) : null;
+        }
     }
 
-    // 변경 후
     sendSuccess('채팅방 목록 조회 성공', $rooms);
 
 } catch (PDOException $e) {

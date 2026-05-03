@@ -85,7 +85,7 @@ try {
         $msg['room_id']    = intval($msg['room_id']);
         $msg['sender_id']  = $msg['sender_id'] ? intval($msg['sender_id']) : null;
         // 안읽은 수 = 전체 멤버 수 - 읽은 수
-        $msg['unread_count'] = $member_count - intval($msg['read_count']);
+        $msg['unread_count'] = ($member_count - 1) - intval($msg['read_count']);
         if ($msg['unread_count'] < 0) $msg['unread_count'] = 0;
         unset($msg['read_count']); // read_count는 내부 계산용이므로 제거
     }

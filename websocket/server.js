@@ -17,13 +17,12 @@ const pool = mysql.createPool({
 });
 
 const io = new Server(3000, { cors: { origin: '*' } });
-console.log('서버 켜짐! 포트 3000');
+console.log('서버 켜짐 포트 3000');
 
 io.on('connection', (socket) => {
   console.log('접속 User SocketID:', socket.id);
 
   socket.on('join', (data) => {
-    // socket.data에 저장 → disconnect 시 로그에서 확인 가능
     socket.data.userId = data.user_id;
     socket.data.roomId = String(data.room_id);
 
@@ -39,7 +38,6 @@ io.on('connection', (socket) => {
     console.log('room:' + roomId + ' 메시지:', data.content);
 
     try {
-      // pool.execute() 사용 — NOW()로 DB 서버 시간 사용 (KST)
       const [result] = await pool.execute(
         'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, created_at) VALUES (?, ?, ?, ?, NOW())',
         [data.room_id, data.user_id, 'text', data.content],
@@ -51,8 +49,17 @@ io.on('connection', (socket) => {
         [result.insertId],
       );
 
+      // [Bug #1 수정] sender_name, sender_profile_image를 DB에서 조회해서 broadcast에 포함
+      // 수신자 입장에서 누가 보냈는지 바로 알 수 있어야 UI에 프로필/닉네임을 표시할 수 있음
+      const [userRows] = await pool.execute(
+        'SELECT user_nickname, user_profile_image FROM users WHERE user_id = ?',
+        [data.user_id],
+      );
+
       data.message_id = result.insertId;
       data.created_at = rows[0].created_at;
+      data.sender_name = userRows[0]?.user_nickname ?? '';
+      data.sender_profile_image = userRows[0]?.user_profile_image ?? '';
 
       console.log('DB 저장 완료! message_id:', result.insertId);
       io.to(roomId).emit('message', data);
@@ -66,7 +73,6 @@ io.on('connection', (socket) => {
     console.log('읽음 처리 room:' + data.room_id + ' user:' + data.user_id);
 
     try {
-      // NOW()로 DB 서버 시간 사용 (KST)
       await pool.execute(
         `UPDATE chat_room_members 
                  SET last_read_at = NOW() 
@@ -74,7 +80,6 @@ io.on('connection', (socket) => {
         [data.room_id, data.user_id],
       );
 
-      // 방 전체에 "누가 읽었다"만 알림
       io.to(String(data.room_id)).emit('read_update', {
         reader_id: data.user_id,
         room_id: data.room_id,

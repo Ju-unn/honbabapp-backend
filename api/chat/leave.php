@@ -54,7 +54,15 @@ try {
     $remaining = intval($stmt->fetch(PDO::FETCH_ASSOC)['cnt']);
 
     if ($remaining === 0) {
-        // 멤버가 0명이면 채팅방 삭제
+        // 멤버가 0명이면 채팅방 전체 삭제
+        // chat_message_reads는 chat_messages의 message_id를 FK로 참조하므로 먼저 삭제해야 함
+        $stmt = $db->prepare("
+            DELETE cmr FROM chat_message_reads cmr
+            INNER JOIN chat_messages cm ON cmr.message_id = cm.message_id
+            WHERE cm.room_id = ?
+        ");
+        $stmt->execute([$room_id]);
+
         $stmt = $db->prepare("DELETE FROM chat_messages WHERE room_id = ?");
         $stmt->execute([$room_id]);
 

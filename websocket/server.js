@@ -56,12 +56,27 @@ io.on('connection', (socket) => {
         [data.user_id],
       );
 
+      // [Bug 4 수정] unread_count 계산: 현재 방 멤버 수 - 발신자 1명
+      // 실시간 수신 메시지에 unread_count가 없으면 Android에서 항상 0으로 표시됨
+      const [memberRows] = await pool.execute(
+        'SELECT COUNT(*) as cnt FROM chat_room_members WHERE room_id = ?',
+        [data.room_id]
+      );
+
       data.message_id = result.insertId;
-      data.created_at = rows[0].created_at;
+
+      // mysql2는 created_at을 Date 객체로 반환 → JSON 직렬화 시 UTC ISO 형식
+      // Android formatTime()은 "yyyy-MM-dd HH:mm:ss" 형식만 파싱 가능하므로 여기서 변환
+      const rawDate = rows[0].created_at;
+      const kst = new Date(rawDate.getTime ? rawDate.getTime() : new Date(rawDate));
+      const pad = n => String(n).padStart(2, '0');
+      data.created_at = `${kst.getFullYear()}-${pad(kst.getMonth()+1)}-${pad(kst.getDate())} ${pad(kst.getHours())}:${pad(kst.getMinutes())}:${pad(kst.getSeconds())}`;
+
       data.sender_name = userRows[0]?.user_nickname ?? '';
       data.sender_profile_image = userRows[0]?.user_profile_image ?? '';
+      data.unread_count = memberRows[0].cnt - 1; // 발신자 제외
 
-      console.log('DB 저장 완료! message_id:', result.insertId);
+      console.log('DB 저장 완료! message_id:', result.insertId, 'unread_count:', data.unread_count);
       io.to(roomId).emit('message', data);
     } catch (err) {
       console.error('DB 저장 실패:', err.message);
@@ -123,6 +138,16 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('읽음 처리 실패:', err.message);
     }
+  });
+
+  // invite 성공 후 클라이언트가 emit → 방 전체에 브로드캐스트
+  // 기존 멤버들이 back/재진입 없이 unread_count 즉시 재계산할 수 있게 함
+  socket.on('member_joined', (data) => {
+    console.log('member_joined room:' + data.room_id + ' new_member:' + data.user_id);
+    io.to(String(data.room_id)).emit('member_joined', {
+      room_id: data.room_id,
+      new_member_id: data.user_id,
+    });
   });
 
   // 연결 종료 - Room 자동 정리됨

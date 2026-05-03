@@ -74,6 +74,11 @@ io.on('connection', (socket) => {
       data.sender_name = userRows[0]?.user_nickname ?? '';
       data.sender_profile_image = userRows[0]?.user_profile_image ?? '';
       data.unread_count = memberRows[0].cnt - 1; // 발신자 제외
+      
+      await pool.execute(
+        `UPDATE chat_rooms SET last_message = ?, last_msg_time = ? WHERE room_id = ?`,
+        [data.content, rows[0].created_at, data.room_id]
+      );
 
       console.log('DB 저장 완료! message_id:', result.insertId, 'unread_count:', data.unread_count);
       io.to(roomId).emit('message', data);
@@ -128,6 +133,7 @@ io.on('connection', (socket) => {
         io.to(String(data.room_id)).emit('read_update', {
           reader_id: data.user_id,
           room_id: data.room_id,
+          newly_read_message_ids: unreadMessages.map(m => m.message_id),  // 추가
         });
         console.log('read_update broadcast 완료!');
       } else {

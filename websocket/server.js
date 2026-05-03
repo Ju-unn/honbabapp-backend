@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
-  timezone: '+09:00', // KST — DB에서 NOW() 사용 시 한국 시간으로 저장
+  timezone: 'Z',
 });
 
 const io = new Server(3000, { cors: { origin: '*' } });
@@ -68,10 +68,9 @@ io.on('connection', (socket) => {
       // mysql2는 created_at을 Date 객체로 반환 → JSON 직렬화 시 UTC ISO 형식
       // Android formatTime()은 "yyyy-MM-dd HH:mm:ss" 형식만 파싱 가능하므로 여기서 변환
       const rawDate = rows[0].created_at;
-      const kst = new Date(rawDate.getTime ? rawDate.getTime() : new Date(rawDate));
+      const utcDate = rawDate instanceof Date ? rawDate : new Date(rawDate);
       const pad = n => String(n).padStart(2, '0');
-      data.created_at = `${kst.getFullYear()}-${pad(kst.getMonth()+1)}-${pad(kst.getDate())} ${pad(kst.getHours())}:${pad(kst.getMinutes())}:${pad(kst.getSeconds())}`;
-
+      data.created_at = `${utcDate.getUTCFullYear()}-${pad(utcDate.getUTCMonth()+1)}-${pad(utcDate.getUTCDate())} ${pad(utcDate.getUTCHours())}:${pad(utcDate.getUTCMinutes())}:${pad(utcDate.getUTCSeconds())}`;
       data.sender_name = userRows[0]?.user_nickname ?? '';
       data.sender_profile_image = userRows[0]?.user_profile_image ?? '';
       data.unread_count = memberRows[0].cnt - 1; // 발신자 제외

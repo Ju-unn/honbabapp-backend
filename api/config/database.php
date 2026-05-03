@@ -9,11 +9,10 @@ class Database {
   private $db_name = '';
   private $username = '';
   private $password = '';
-  public $conn;
+  private $conn;
 
   public function __construct() {
     $this->loadEnv();
-
     $this->host = $this->getEnvValue('DB_HOST', $this->host);
     $this->db_name = $this->getEnvValue('DB_NAME', $this->db_name);
     $this->username = $this->getEnvValue('DB_USER', $this->username);

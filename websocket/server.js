@@ -2,10 +2,6 @@ const { Server } = require('socket.io');
 const mysql = require('mysql2/promise');
 require('dotenv').config({ path: '/var/www/html/.env' });
 
-// DB 연결 풀 생성
-// createConnection 대신 createPool 사용:
-// - 동시 요청을 병렬 처리 가능 (최대 10개 연결)
-// - DB 연결이 끊겨도 자동 재연결
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -22,20 +18,18 @@ console.log('서버 켜짐! 포트 3000');
 io.on('connection', (socket) => {
   console.log('접속 User SocketID:', socket.id);
 
-  socket.on('join', (data) => {
+  // 방 단위가 아니라 유저 단위로 채널 등록
+  // → 앱 켜지면 login 한 번으로 모든 채팅방 이벤트 수신 가능
+  socket.on('login', (data) => {
     socket.data.userId = data.user_id;
-    socket.data.roomId = String(data.room_id);
-
-    const roomId = String(data.room_id);
-    socket.join(roomId);
-    console.log('room:' + roomId + ' 입장 (user_id:' + data.user_id + ')');
-    socket.emit('system', { content: roomId + '번 채팅방 입장 완료!' });
+    socket.join(`user_${data.user_id}`);   // "user_5" 같은 개인 채널에 등록
+    console.log(`user_${data.user_id} 로그인 등록`);
+    socket.emit('system', { content: '로그인 등록 완료' });
   });
 
-  // 메시지 수신 → DB 저장 → 방 전체에 전달
+  // 메시지 수신 → DB 저장 → 멤버 전원 user 채널로 fan-out
   socket.on('message', async (data) => {
-    const roomId = String(data.room_id);
-    console.log('room:' + roomId + ' 메시지:', data.content);
+    console.log('room:' + data.room_id + ' 메시지:', data.content);
 
     try {
       const [result] = await pool.execute(
@@ -43,21 +37,16 @@ io.on('connection', (socket) => {
         [data.room_id, data.user_id, 'text', data.content],
       );
 
-      // DB에서 저장된 시간 조회
       const [rows] = await pool.execute(
         'SELECT created_at FROM chat_messages WHERE message_id = ?',
         [result.insertId],
       );
 
-      // sender_name, sender_profile_image를 DB에서 조회해서 broadcast에 포함
-      // 수신자 입장에서 누가 보냈는지 바로 알 수 있어야 UI에 프로필/닉네임을 표시할 수 있음
       const [userRows] = await pool.execute(
         'SELECT user_nickname, user_profile_image FROM users WHERE user_id = ?',
         [data.user_id],
       );
 
-      // unread_count 계산: 현재 방 멤버 수 - 발신자 1명
-      // 실시간 수신 메시지에 unread_count가 없으면 Android에서 항상 0으로 표시됨
       const [memberRows] = await pool.execute(
         'SELECT COUNT(*) as cnt FROM chat_room_members WHERE room_id = ?',
         [data.room_id]
@@ -65,8 +54,7 @@ io.on('connection', (socket) => {
 
       data.message_id = result.insertId;
 
-      // mysql2는 created_at을 Date 객체로 반환 → JSON 직렬화 시 UTC ISO 형식
-      // Android formatTime()은 "yyyy-MM-dd HH:mm:ss" 형식만 파싱 가능하므로 여기서 변환
+      // 파싱문제로 파싱해서 db로 전달
       const rawDate = rows[0].created_at;
       const utcDate = rawDate instanceof Date ? rawDate : new Date(rawDate);
       const pad = n => String(n).padStart(2, '0');
@@ -74,29 +62,33 @@ io.on('connection', (socket) => {
       data.sender_name = userRows[0]?.user_nickname ?? '';
       data.sender_profile_image = userRows[0]?.user_profile_image ?? '';
       data.unread_count = memberRows[0].cnt - 1; // 발신자 제외
-      
+
       await pool.execute(
         `UPDATE chat_rooms SET last_message = ?, last_msg_time = ? WHERE room_id = ?`,
         [data.content, rows[0].created_at, data.room_id]
       );
 
       console.log('DB 저장 완료! message_id:', result.insertId, 'unread_count:', data.unread_count);
-      io.to(roomId).emit('message', data);
+
+      // fan-out: room_id 대신 멤버 각자의 user_채널로 전송
+      const [members] = await pool.execute(
+        'SELECT user_id FROM chat_room_members WHERE room_id = ?',
+        [data.room_id]
+      );
+      for (const m of members) {
+        io.to(`user_${m.user_id}`).emit('message', data);
+      }
+
     } catch (err) {
       console.error('DB 저장 실패:', err.message);
     }
   });
 
   // 읽음 처리
-  // 내가 아직 읽지 않은 메시지를 chat_message_reads에 INSERT + 이미 읽은 경우 broadcast 생략
   socket.on('read', async (data) => {
     console.log('읽음 처리 room:' + data.room_id + ' user:' + data.user_id);
 
     try {
-      // 1. 이 방에서 내가 아직 읽지 않은 메시지 조회
-      //        - 내가 보낸 메시지(sender_id = 나)는 제외 — 내 메시지를 내가 읽음 처리할 필요 없음
-      //        - 시스템 메시지(sender_id IS NULL)도 제외
-      //        - chat_message_reads에 이미 있는 것도 제외 → 중복 INSERT 방지
       const [unreadMessages] = await pool.execute(`
         SELECT cm.message_id FROM chat_messages cm
         WHERE cm.room_id = ?
@@ -108,34 +100,36 @@ io.on('connection', (socket) => {
       `, [data.room_id, data.user_id, data.user_id]);
 
       if (unreadMessages.length > 0) {
-        // 2. 신규 읽음 레코드 일괄 INSERT
-        // INSERT IGNORE → 혹시 중복이 생겨도 에러 없이 무시
         const placeholders = unreadMessages.map(() => '(?, ?, NOW())').join(',');
         const params = unreadMessages.flatMap(m => [m.message_id, data.user_id]);
         await pool.execute(
           `INSERT IGNORE INTO chat_message_reads (message_id, user_id, read_at) VALUES ${placeholders}`,
           params
         );
-        console.log('읽음 INSERT 완료! ' + unreadMessages.length + '건');
+        console.log('읽음 INSERT 완료 ' + unreadMessages.length + '건');
       }
 
-      // 3. last_read_at은 항상 갱신 (채팅방 목록의 뱃지 계산에 사용)
       await pool.execute(
         `UPDATE chat_room_members SET last_read_at = NOW() WHERE room_id = ? AND user_id = ?`,
         [data.room_id, data.user_id]
       );
 
-      // 4. 실제로 새로 읽은 메시지가 있을 때만 read_update broadcast
-      //        - 이미 읽은 사람이 재진입해도 불필요한 broadcast 없음 → 중복 감소 방지
+      // read_update fan-out
       if (unreadMessages.length > 0) {
-        io.to(String(data.room_id)).emit('read_update', {
-          reader_id: data.user_id,
-          room_id: data.room_id,
-          newly_read_message_ids: unreadMessages.map(m => m.message_id),  // 추가
-        });
-        console.log('read_update broadcast 완료!');
+        const [members] = await pool.execute(
+          'SELECT user_id FROM chat_room_members WHERE room_id = ?',
+          [data.room_id]
+        );
+        for (const m of members) {
+          io.to(`user_${m.user_id}`).emit('read_update', {
+            reader_id: data.user_id,
+            room_id: data.room_id,
+            newly_read_message_ids: unreadMessages.map(m => m.message_id),
+          });
+        }
+        console.log('read_update fan-out 완료');
       } else {
-        console.log('이미 읽음 처리됨 — broadcast 생략');
+        console.log('이미 읽음 처리됨 — broadcast 생략략');
       }
 
     } catch (err) {
@@ -143,24 +137,27 @@ io.on('connection', (socket) => {
     }
   });
 
-  // invite 성공 후 클라이언트가 emit → 방 전체에 브로드캐스트
-  // 기존 멤버들이 back/재진입 없이 unread_count 즉시 재계산할 수 있게 함
-  socket.on('member_joined', (data) => {
+  // member_joined fan-out
+  socket.on('member_joined', async (data) => {
     console.log('member_joined room:' + data.room_id + ' new_member:' + data.user_id);
-    io.to(String(data.room_id)).emit('member_joined', {
-      room_id: data.room_id,
-      new_member_id: data.user_id,
-    });
+    try {
+      const [members] = await pool.execute(
+        'SELECT user_id FROM chat_room_members WHERE room_id = ?',
+        [data.room_id]
+      );
+      for (const m of members) {
+        io.to(`user_${m.user_id}`).emit('member_joined', {
+          room_id: data.room_id,
+          new_member_id: data.user_id,
+        });
+      }
+    } catch (err) {
+      console.error('member_joined fan-out 실패:', err.message);
+    }
   });
 
-  // 연결 종료 - Room 자동 정리됨
+  // 연결 종료
   socket.on('disconnect', () => {
-    console.log(
-      '연결 종료 - user_id:' +
-        socket.data.userId +
-        ' room:' +
-        socket.data.roomId +
-        ' (Room 자동 정리됨)',
-    );
+    console.log('연결 종료 - user_id:' + socket.data.userId);
   });
 });

@@ -49,14 +49,14 @@ io.on('connection', (socket) => {
         [result.insertId],
       );
 
-      // [Bug #1 수정] sender_name, sender_profile_image를 DB에서 조회해서 broadcast에 포함
+      // sender_name, sender_profile_image를 DB에서 조회해서 broadcast에 포함
       // 수신자 입장에서 누가 보냈는지 바로 알 수 있어야 UI에 프로필/닉네임을 표시할 수 있음
       const [userRows] = await pool.execute(
         'SELECT user_nickname, user_profile_image FROM users WHERE user_id = ?',
         [data.user_id],
       );
 
-      // [Bug 4 수정] unread_count 계산: 현재 방 멤버 수 - 발신자 1명
+      // unread_count 계산: 현재 방 멤버 수 - 발신자 1명
       // 실시간 수신 메시지에 unread_count가 없으면 Android에서 항상 0으로 표시됨
       const [memberRows] = await pool.execute(
         'SELECT COUNT(*) as cnt FROM chat_room_members WHERE room_id = ?',
@@ -88,14 +88,12 @@ io.on('connection', (socket) => {
   });
 
   // 읽음 처리
-  // [신규A] 기존: last_read_at만 UPDATE → messages.php가 chat_message_reads를 COUNT하므로
-  //         REST 재로드 시 항상 read_count=0 → unread_count가 원래 값으로 리셋되는 버그
-  // 수정: 내가 아직 읽지 않은 메시지를 chat_message_reads에 INSERT + 이미 읽은 경우 broadcast 생략
+  // 내가 아직 읽지 않은 메시지를 chat_message_reads에 INSERT + 이미 읽은 경우 broadcast 생략
   socket.on('read', async (data) => {
     console.log('읽음 처리 room:' + data.room_id + ' user:' + data.user_id);
 
     try {
-      // 1단계: 이 방에서 내가 아직 읽지 않은 메시지 조회
+      // 1. 이 방에서 내가 아직 읽지 않은 메시지 조회
       //        - 내가 보낸 메시지(sender_id = 나)는 제외 — 내 메시지를 내가 읽음 처리할 필요 없음
       //        - 시스템 메시지(sender_id IS NULL)도 제외
       //        - chat_message_reads에 이미 있는 것도 제외 → 중복 INSERT 방지
@@ -110,7 +108,7 @@ io.on('connection', (socket) => {
       `, [data.room_id, data.user_id, data.user_id]);
 
       if (unreadMessages.length > 0) {
-        // 2단계: 신규 읽음 레코드 일괄 INSERT
+        // 2. 신규 읽음 레코드 일괄 INSERT
         // INSERT IGNORE → 혹시 중복이 생겨도 에러 없이 무시
         const placeholders = unreadMessages.map(() => '(?, ?, NOW())').join(',');
         const params = unreadMessages.flatMap(m => [m.message_id, data.user_id]);
@@ -121,14 +119,14 @@ io.on('connection', (socket) => {
         console.log('읽음 INSERT 완료! ' + unreadMessages.length + '건');
       }
 
-      // 3단계: last_read_at은 항상 갱신 (채팅방 목록의 뱃지 계산에 사용)
+      // 3. last_read_at은 항상 갱신 (채팅방 목록의 뱃지 계산에 사용)
       await pool.execute(
         `UPDATE chat_room_members SET last_read_at = NOW() WHERE room_id = ? AND user_id = ?`,
         [data.room_id, data.user_id]
       );
 
-      // 4단계: 실제로 새로 읽은 메시지가 있을 때만 read_update broadcast
-      //        → 이미 읽은 사람이 재진입해도 불필요한 broadcast 없음 → 중복 감소 방지
+      // 4. 실제로 새로 읽은 메시지가 있을 때만 read_update broadcast
+      //        - 이미 읽은 사람이 재진입해도 불필요한 broadcast 없음 → 중복 감소 방지
       if (unreadMessages.length > 0) {
         io.to(String(data.room_id)).emit('read_update', {
           reader_id: data.user_id,

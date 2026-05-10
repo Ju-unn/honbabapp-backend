@@ -149,6 +149,152 @@ try {
             $complete_stmt->execute();
         }
     }
+
+    // 7. 채팅방 자동 생성 or 멤버 추가
+    $room_id = null;
+
+    if ($action === 'approve') {
+        $meeting_id   = $participant['meeting_id'];
+        $approved_uid = $participant['user_id'];
+
+        // 7-1. 승인된 사용자 닉네임 조회
+        $nick_stmt = $db->prepare("SELECT user_nickname FROM users WHERE user_id = :uid");
+        $nick_stmt->bindParam(':uid', $approved_uid);
+        $nick_stmt->execute();
+        $approved_user     = $nick_stmt->fetch(PDO::FETCH_ASSOC);
+        $approved_nickname = $approved_user ? $approved_user['user_nickname'] : '참여자';
+
+        // 7-2. 이 모임의 채팅방이 이미 있는지 확인
+        $room_check = $db->prepare("SELECT room_id FROM chat_rooms WHERE meeting_id = :mid LIMIT 1");
+        $room_check->bindParam(':mid', $meeting_id);
+        $room_check->execute();
+        $existing_room = $room_check->fetch(PDO::FETCH_ASSOC);
+
+        if (!$existing_room) {
+            // ── CASE A: 채팅방 없음 → 새로 생성 ──────────────────────
+            
+            // 모임제목 + 이미지 조회 (없으면 방장 프로필 이미지로)
+            $title_stmt = $db->prepare(
+                "SELECT m.meeting_title, m.meeting_image, u.user_profile_image
+                 FROM meetings m
+                 JOIN users u ON m.meeting_host_id = u.user_id
+                 WHERE m.meeting_id = :mid"
+            );
+            $title_stmt->bindParam(':mid', $meeting_id);
+            $title_stmt->execute();
+            $meeting_row = $title_stmt->fetch(PDO::FETCH_ASSOC);
+
+            $room_name  = $meeting_row ? $meeting_row['meeting_title'] : '모임 채팅';
+             // meeting_image가 있으면 그걸, 없으면 방장 프로필 이미지
+            $room_image = $meeting_row
+                ? ($meeting_row['meeting_image'] ?: $meeting_row['user_profile_image'])
+                : null;
+
+            // chat_rooms 생성
+            $create_room = $db->prepare(
+                "INSERT INTO chat_rooms (room_type, room_name, room_image, meeting_id, owner_id, created_at)
+                 VALUES ('group', :rname, :rimage, :mid, :owner, NOW())"
+            );
+            $create_room->bindParam(':rname',  $room_name);
+            $create_room->bindParam(':rimage', $room_image);
+            $create_room->bindParam(':mid',    $meeting_id);
+            $create_room->bindParam(':owner',  $host_id);
+            $create_room->execute();
+            $room_id = (int)$db->lastInsertId();
+            
+            // 방장 멤버 추가
+            $add_host = $db->prepare(
+                "INSERT INTO chat_room_members (room_id, user_id, last_read_at, joined_at)
+                 VALUES (:rid, :uid, NOW(), NOW())"
+            );
+            $add_host->bindParam(':rid', $room_id);
+            $add_host->bindParam(':uid', $host_id);
+            $add_host->execute();
+
+            // 신청자 멤버 추가
+            $add_member = $db->prepare(
+                "INSERT INTO chat_room_members (room_id, user_id, last_read_at, joined_at)
+                 VALUES (:rid, :uid, NOW(), NOW())"
+            );
+            $add_member->bindParam(':rid', $room_id);
+            $add_member->bindParam(':uid', $approved_uid);
+            $add_member->execute();
+
+            // 시스템 메시지 1: 방 생성 안내
+            $sys1 = '채팅방이 생성되었습니다.';
+            $msg1 = $db->prepare(
+                "INSERT INTO chat_messages (room_id, sender_id, msg_type, content, created_at)
+                 VALUES (:rid, NULL, 'system', :content, NOW())"
+            );
+            $msg1->bindParam(':rid', $room_id);
+            $msg1->bindParam(':content', $sys1);
+            $msg1->execute();
+
+            // 시스템 메시지 2: 신청자 초대 안내
+            $sys2 = $approved_nickname . '님이 초대되었습니다.';
+            $msg2 = $db->prepare(
+                "INSERT INTO chat_messages (room_id, sender_id, msg_type, content, created_at)
+                 VALUES (:rid, NULL, 'system', :content, NOW())"
+            );
+            $msg2->bindParam(':rid', $room_id);
+            $msg2->bindParam(':content', $sys2);
+            $msg2->execute();
+
+            // chat_rooms 마지막 메시지 업데이트
+            $upd = $db->prepare(
+                "UPDATE chat_rooms SET last_message = :lm, last_msg_time = NOW() WHERE room_id = :rid"
+            );
+            $upd->bindParam(':lm',  $sys2);
+            $upd->bindParam(':rid', $room_id);
+            $upd->execute();
+
+        } else {
+            // ── CASE B: 채팅방 이미 있음 → 멤버만 추가 ──────────────
+
+            $room_id = (int)$existing_room['room_id'];
+
+            // 이미 멤버인지 확인 (중복 방지)
+            $mem_check = $db->prepare(
+                "SELECT id FROM chat_room_members WHERE room_id = :rid AND user_id = :uid"
+            );
+            $mem_check->bindParam(':rid', $room_id);
+            $mem_check->bindParam(':uid', $approved_uid);
+            $mem_check->execute();
+
+            if (!$mem_check->fetch()) {
+                // 멤버 추가
+                $add2 = $db->prepare(
+                    "INSERT INTO chat_room_members (room_id, user_id, last_read_at, joined_at)
+                     VALUES (:rid, :uid, NOW(), NOW())"
+                );
+                $add2->bindParam(':rid', $room_id);
+                $add2->bindParam(':uid', $approved_uid);
+                $add2->execute();
+
+                // 시스템 메시지: 초대 안내
+                $sys3 = $approved_nickname . '님이 초대되었습니다.';
+                $msg3 = $db->prepare(
+                    "INSERT INTO chat_messages (room_id, sender_id, msg_type, content, created_at)
+                     VALUES (:rid, NULL, 'system', :content, NOW())"
+                );
+                $msg3->bindParam(':rid', $room_id);
+                $msg3->bindParam(':content', $sys3);
+                $msg3->execute();
+
+                // chat_rooms 마지막 메시지 업데이트
+                $upd2 = $db->prepare(
+                    "UPDATE chat_rooms SET last_message = :lm, last_msg_time = NOW() WHERE room_id = :rid"
+                );
+                $upd2->bindParam(':lm',  $sys3);
+                $upd2->bindParam(':rid', $room_id);
+                $upd2->execute();
+            }
+            // 이미 멤버면 아무것도 하지 않음
+        }
+    
+    }
+
+
     
     // 트랜잭션 커밋
     $db->commit();
@@ -162,6 +308,7 @@ try {
     
     if ($action === 'approve') {
         $response_data['meeting_current_participants'] = (int)$meeting_current_participants;
+        $response_data['room_id'] = $room_id;  // ← NEW: 생성/조회된 채팅방 ID
     }
     
     sendSuccess($message, $response_data);

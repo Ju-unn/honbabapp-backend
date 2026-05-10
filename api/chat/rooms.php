@@ -25,6 +25,7 @@ try {
             cr.room_id,
             cr.room_type,
             cr.room_name,
+            cr.room_image,
             cr.meeting_id,
             cr.owner_id,
             cr.last_message,

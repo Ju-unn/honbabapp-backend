@@ -292,7 +292,9 @@ try {
             // 이미 멤버면 아무것도 하지 않음
         }
     
+
     }
+
 
 
     
@@ -308,7 +310,6 @@ try {
     
     if ($action === 'approve') {
         $response_data['meeting_current_participants'] = (int)$meeting_current_participants;
-        $response_data['room_id'] = $room_id;  // ← NEW: 생성/조회된 채팅방 ID
     }
     
     sendSuccess($message, $response_data);

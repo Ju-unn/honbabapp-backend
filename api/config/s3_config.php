@@ -17,7 +17,7 @@ $dotenv->load();
  class S3Config{
 
   //S3 버킷 설정
-  private const BUCKET_NAME = 'honbabapp-images-2';
+  private const BUCKET_NAME = 'honbabapp-images';
   private const REGION = 'ap-northeast-2';
   private const ACL = 'public-read';
 

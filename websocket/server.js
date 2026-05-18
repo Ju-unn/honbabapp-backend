@@ -17,24 +17,24 @@ console.log('서버 켜짐! 포트 3000');
 
 
 // ═══════════════════════════════════════════════════════════════
-//   HTTP /emit 엔드포인트 (PHP → Node.js broadcast 요청 수신용)
+//   HTTP /emit, /emit_user 엔드포인트 (PHP → Node.js broadcast 요청 수신용)
 //
 //   사용처: api/utils/socket_emit.php
-//   포맷:
-//     POST /emit
-//     Content-Type: application/json
-//     { "room_id": 5, "event": "member_left", "payload": {...} }
 //
-//   동작: 방의 모든 멤버를 chat_room_members 에서 조회 →
-//        각 user_{id} 채널로 event 전송
+//   /emit        : 방 전체 fan-out (chat_room_members 기준)
+//                  POST { "room_id": 5, "event": "member_left", "payload": {...} }
 //
-//   응답: { "success": true, "broadcasted_to": 3 }
+//   /emit_user   : 특정 user 1명에게 직접 (강퇴 알림 등)
+//                  POST { "user_id": 7, "event": "kicked", "payload": {...} }
+//
+//   응답: { "success": true, "broadcasted_to": 3 }  (room fan-out)
+//        { "success": true, "target_user_id": 7 }  (user 직접)
 //
 //   구현 노트:
 //   socket.io 의 기본 'request' 핸들러를 빼두고, 우리가 라우팅을 책임짐.
-//   /emit 이 아니면 socket.io 기본 핸들러로 위임. 이렇게 안 하면 우리가
-//   res.end() 한 뒤 socket.io 가 같은 res 에 또 쓰려다 ERR_HTTP_HEADERS_SENT
-//   터지면서 프로세스가 죽음.
+//   우리 라우트가 아니면 socket.io 기본 핸들러로 위임. 이렇게 안 하면
+//   우리가 res.end() 한 뒤 socket.io 가 같은 res 에 또 쓰려다
+//   ERR_HTTP_HEADERS_SENT 터지면서 프로세스가 죽음.
 // ═══════════════════════════════════════════════════════════════
 
 // 1) socket.io 가 등록해둔 'request' 리스너들을 빼서 보관
@@ -44,53 +44,92 @@ io.httpServer.removeAllListeners('request');
 // 2) 우리가 라우팅 통합 담당
 io.httpServer.on('request', (req, res) => {
 
-  // ─── /emit 이 아니면 socket.io 기본 핸들러로 위임 ───
-  if (req.url !== '/emit' || req.method !== 'POST') {
+  const isEmitRoom = (req.url === '/emit'      && req.method === 'POST');
+  const isEmitUser = (req.url === '/emit_user' && req.method === 'POST');
+
+  // ─── 우리 라우트가 아니면 socket.io 기본 핸들러로 위임 ───
+  if (!isEmitRoom && !isEmitUser) {
     for (const listener of socketIoRequestListeners) {
       listener.call(io.httpServer, req, res);
     }
     return;
   }
 
-  // ─── /emit 처리: HTTP body 읽기 (스트림 → 문자열) ───
+  // ─── 우리 라우트 처리: HTTP body 읽기 (스트림 → 문자열) ───
   let body = '';
   req.on('data', chunk => { body += chunk; });
   req.on('end', async () => {
     try {
-      const data = JSON.parse(body);
-      const room_id = parseInt(data.room_id);
+      const data    = JSON.parse(body);
       const event   = data.event;
       const payload = data.payload || {};
 
-      // 검증
-      if (!room_id || !event) {
+      if (!event) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
           success: false,
-          error: 'room_id 와 event 가 필요합니다'
+          error: 'event 가 필요합니다'
         }));
       }
 
-      // 방 멤버 조회 → user_{id} 채널로 fan-out
-      const [members] = await pool.execute(
-        'SELECT user_id FROM chat_room_members WHERE room_id = ?',
-        [room_id]
-      );
+      // ───────────────────────────────────────
+      // ROUTE A) /emit — 방 전체 fan-out
+      // ───────────────────────────────────────
+      if (isEmitRoom) {
+        const room_id = parseInt(data.room_id);
+        if (!room_id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: 'room_id 가 필요합니다'
+          }));
+        }
 
-      for (const m of members) {
-        io.to(`user_${m.user_id}`).emit(event, payload);
+        // 방 멤버 조회 → user_{id} 채널로 fan-out
+        const [members] = await pool.execute(
+          'SELECT user_id FROM chat_room_members WHERE room_id = ?',
+          [room_id]
+        );
+
+        for (const m of members) {
+          io.to(`user_${m.user_id}`).emit(event, payload);
+        }
+
+        console.log(`[/emit] room=${room_id} event=${event} → ${members.length}명 broadcast`);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          broadcasted_to: members.length,
+        }));
       }
 
-      console.log(`[/emit] room=${room_id} event=${event} → ${members.length}명에게 broadcast`);
+      // ───────────────────────────────────────
+      // ROUTE B) /emit_user — 특정 user 1명에게 직접
+      // ───────────────────────────────────────
+      if (isEmitUser) {
+        const user_id = parseInt(data.user_id);
+        if (!user_id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: 'user_id 가 필요합니다'
+          }));
+        }
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        success: true,
-        broadcasted_to: members.length,
-      }));
+        io.to(`user_${user_id}`).emit(event, payload);
+
+        console.log(`[/emit_user] user=${user_id} event=${event}`);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          target_user_id: user_id,
+        }));
+      }
 
     } catch (err) {
-      console.error('[/emit] 처리 실패:', err.message);
+      console.error('[emit handler] 처리 실패:', err.message);
       // 헤더 아직 안 보냈을 때만 응답 (이미 보냈으면 그냥 스킵 — 프로세스 안 죽게)
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });

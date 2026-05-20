@@ -30,11 +30,6 @@ console.log('서버 켜짐! 포트 3000');
 //   응답: { "success": true, "broadcasted_to": 3 }  (room fan-out)
 //        { "success": true, "target_user_id": 7 }  (user 직접)
 //
-//   구현 노트:
-//   socket.io 의 기본 'request' 핸들러를 빼두고, 우리가 라우팅을 책임짐.
-//   우리 라우트가 아니면 socket.io 기본 핸들러로 위임. 이렇게 안 하면
-//   우리가 res.end() 한 뒤 socket.io 가 같은 res 에 또 쓰려다
-//   ERR_HTTP_HEADERS_SENT 터지면서 프로세스가 죽음.
 // ═══════════════════════════════════════════════════════════════
 
 // 1) socket.io 가 등록해둔 'request' 리스너들을 빼서 보관
@@ -156,13 +151,44 @@ io.on('connection', (socket) => {
   });
 
   // 메시지 수신 → DB 저장 → 멤버 전원 user 채널로 fan-out
+  //
+  // 지원하는 msg_type:
+  //   'text'  : 일반 텍스트 메시지
+  //   'image' : 이미지 메시지 (data.image_url 필수, S3 URL)
+  //
+  // 클라이언트 예시:
+  //   텍스트: { room_id, user_id, content: "안녕하세요" }
+  //          → msg_type 생략 시 자동으로 'text'
+  //   이미지: { room_id, user_id, msg_type: 'image', image_url: 'https://...', content: '사진' }
+  //
   socket.on('message', async (data) => {
-    console.log('room:' + data.room_id + ' 메시지:', data.content);
+    // msg_type 기본값 'text'
+    const msg_type  = data.msg_type === 'image' ? 'image' : 'text';
+    const image_url = msg_type === 'image' ? (data.image_url || null) : null;
+
+    // 이미지 메시지인데 image_url 없으면 거부
+    if (msg_type === 'image' && !image_url) {
+      console.error('이미지 메시지인데 image_url 없음, 무시');
+      return;
+    }
+
+    // last_message 표시용 텍스트
+    //   - 이미지: '사진' 으로 고정
+    //   - 텍스트: content 그대로
+    const lastMessageText = msg_type === 'image' ? '사진' : data.content;
+
+    // chat_messages.content 저장값
+    //   - 이미지: '사진'
+    //   - 텍스트: data.content 그대로
+    const contentForDB = msg_type === 'image' ? '사진' : data.content;
+
+    console.log(`room:${data.room_id} type:${msg_type} ${msg_type === 'image' ? image_url : data.content}`);
 
     try {
+      // 1) INSERT — image_url 컬럼까지 채워넣음
       const [result] = await pool.execute(
-        'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, created_at) VALUES (?, ?, ?, ?, NOW())',
-        [data.room_id, data.user_id, 'text', data.content],
+        'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, image_url, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+        [data.room_id, data.user_id, msg_type, contentForDB, image_url],
       );
 
       const [rows] = await pool.execute(
@@ -180,7 +206,11 @@ io.on('connection', (socket) => {
         [data.room_id]
       );
 
+      // fan-out payload 구성
       data.message_id = result.insertId;
+      data.msg_type   = msg_type;   // 클라이언트가 분기할 수 있게 응답에 명시
+      data.image_url  = image_url;  // 텍스트 메시지면 null
+      data.content    = contentForDB;
 
       // 파싱문제로 파싱해서 db로 전달
       const rawDate = rows[0].created_at;
@@ -191,14 +221,15 @@ io.on('connection', (socket) => {
       data.sender_profile_image = userRows[0]?.user_profile_image ?? '';
       data.unread_count = memberRows[0].cnt - 1; // 발신자 제외
 
+      // 2) chat_rooms.last_message 갱신 — 이미지면 '사진', 텍스트면 원문
       await pool.execute(
         `UPDATE chat_rooms SET last_message = ?, last_msg_time = ? WHERE room_id = ?`,
-        [data.content, rows[0].created_at, data.room_id]
+        [lastMessageText, rows[0].created_at, data.room_id]
       );
 
-      console.log('DB 저장 완료! message_id:', result.insertId, 'unread_count:', data.unread_count);
+      console.log(`DB 저장 완료! message_id:${result.insertId} type:${msg_type} unread:${data.unread_count}`);
 
-      // fan-out: room_id 대신 멤버 각자의 user_채널로 전송
+      // 3) fan-out: room_id 대신 멤버 각자의 user_채널로 전송
       const [members] = await pool.execute(
         'SELECT user_id FROM chat_room_members WHERE room_id = ?',
         [data.room_id]

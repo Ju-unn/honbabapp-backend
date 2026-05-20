@@ -27,6 +27,9 @@ $dotenv->load();
   // 모임 이미지 업로드 경로
   private const MEETING_IMAGE_PATH = "meetings/";
 
+  // 채팅 이미지 업로드 경로
+  private const CHAT_IMAGE_PATH = "chat/";
+
   // IAM 사용자 엑세스 키 
   private $accessKey;
   private $secretKey;
@@ -122,6 +125,37 @@ $dotenv->load();
         throw new Exception('모임 이미지 업로드 실패: ' . $e->getMessage());
     }
 }
+
+ /**
+   * 채팅 이미지를 S3에 업로드
+   *
+   * Android 에서 갤러리/카메라로 가져온 이미지를
+   * upload_chat_image.php 를 통해 이 메서드가 호출됨
+   *
+   * @param string $filePath  서버에 업로드된 임시 파일 경로 ($_FILES['chat_image']['tmp_name'])
+   * @param string $fileName  S3에 저장할 파일명 (chat_{room}_{user}_{timestamp}_{random}.{ext})
+   * @param string $mimeType  MIME 타입 (image/jpeg, image/png, image/webp)
+   * @return string           S3 퍼블릭 URL
+   */
+  public function uploadChatImage($filePath, $fileName, $mimeType) {
+    try {
+        // S3 키 생성
+        $s3Key = self::CHAT_IMAGE_PATH . $fileName;
+ 
+        // S3 업로드
+        $this->s3Client->putObject([
+            'Bucket'      => self::BUCKET_NAME,
+            'Key'         => $s3Key,
+            'SourceFile'  => $filePath,
+            'ContentType' => $mimeType,
+        ]);
+ 
+        return $this->s3Client->getObjectUrl(self::BUCKET_NAME, $s3Key);
+    } catch (AwsException $e) {
+        error_log('S3 채팅 이미지 업로드 실패: ' . $e->getMessage());
+        throw new Exception('채팅 이미지 업로드 실패: ' . $e->getMessage());
+    }
+  } 
 
 
 

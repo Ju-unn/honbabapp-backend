@@ -112,8 +112,9 @@ try {
 
     // 6. 채팅방 멤버 권한 검증
     //    이게 빠지면 비멤버도 임의의 room_id 로 S3 에 이미지 업로드 가능
-    $pdo = getDBConnection();
-    $stmt = $pdo->prepare(
+    $database = new Database();
+    $db = $database->getConnection();
+    $stmt = $db->prepare(
         'SELECT 1 FROM chat_room_members WHERE room_id = ? AND user_id = ? LIMIT 1'
     );
     $stmt->execute([$room_id, $user_id]);

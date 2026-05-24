@@ -1,6 +1,7 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/socket_emit.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -26,9 +27,9 @@ if (!$db) {
 }
 
 try {
-    // 그룹 채팅방인지 확인
+    // 그룹 채팅방인지 확인 + room_name 가져오기
     $stmt = $db->prepare("
-        SELECT room_type FROM chat_rooms WHERE room_id = ?
+        SELECT room_type, room_name FROM chat_rooms WHERE room_id = ?
     ");
     $stmt->execute([$room_id]);
     $room = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -39,6 +40,8 @@ try {
     if ($room['room_type'] !== 'group') {
         sendError('그룹 채팅방에서만 초대할 수 있습니다');
     }
+    
+    $room_name = $room['room_name'];
 
     // 초대자가 멤버인지 확인
     $stmt = $db->prepare("
@@ -84,6 +87,7 @@ try {
         VALUES (?, NULL, 'system', ?, NOW())
     ");
     $stmt->execute([$room_id, $system_msg]);
+    $message_id = (int)$db->lastInsertId();
 
     // last_message 업데이트
     $stmt = $db->prepare("
@@ -93,7 +97,43 @@ try {
     ");
     $stmt->execute([$system_msg, $room_id]);
 
+    // created_at 조회 (message 이벤트용)
+    $stmt = $db->prepare("
+        SELECT created_at FROM chat_messages WHERE message_id = ?
+    ");
+    $stmt->execute([$message_id]);
+    $msg_row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $created_at = $msg_row ? $msg_row['created_at'] : date('Y-m-d H:i:s');
+
     $db->commit();
+
+    // ────────────────────────────────────────────────────────────
+    // 트랜잭션 커밋 후 WebSocket emit
+    // ────────────────────────────────────────────────────────────
+    
+    // 1) 초대된 사람에게 room_joined
+    emit_to_user($target_user_id, 'room_joined', [
+        'room_id'   => $room_id,
+        'room_type' => 'group',
+        'room_name' => $room_name
+    ]);
+    
+    // 2) 방의 기존 멤버들에게 member_joined
+    emit_to_room($room_id, 'member_joined', [
+        'room_id'  => $room_id,
+        'user_id'  => $target_user_id,
+        'nickname' => $target_user['nickname']
+    ]);
+    
+    // 3) 시스템 메시지를 message 이벤트로 broadcast
+    emit_to_room($room_id, 'message', [
+        'room_id'    => $room_id,
+        'message_id' => $message_id,
+        'msg_type'   => 'system',
+        'sender_id'  => null,
+        'content'    => $system_msg,
+        'created_at' => $created_at
+    ]);
 
     sendSuccess('초대 성공', [
         'room_id'        => $room_id,

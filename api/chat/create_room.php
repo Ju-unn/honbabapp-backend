@@ -1,6 +1,7 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/socket_emit.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -66,7 +67,7 @@ try {
         VALUES (?, ?, ?, ?, NOW())
     ");
     $stmt->execute([$room_type, $room_name, $meeting_id ?: null, $owner_id]);
-    $room_id = $db->lastInsertId();
+    $room_id = (int)$db->lastInsertId();
 
     // 멤버 추가 (owner + member_ids)
     $all_members = array_unique(array_merge([$owner_id], array_map('intval', $member_ids)));
@@ -78,6 +79,9 @@ try {
         $stmt2->execute([$room_id, $uid]);
     }
 
+    $message_id = null;
+    $created_at = null;
+
     // 그룹방 시스템 메시지
     if ($room_type === 'group') {
         $stmt3 = $db->prepare("
@@ -85,6 +89,15 @@ try {
             VALUES (?, NULL, 'system', '채팅방이 생성되었습니다.', NOW())
         ");
         $stmt3->execute([$room_id]);
+        $message_id = (int)$db->lastInsertId();
+
+        // created_at 조회
+        $stmt_time = $db->prepare("
+            SELECT created_at FROM chat_messages WHERE message_id = ?
+        ");
+        $stmt_time->execute([$message_id]);
+        $time_row = $stmt_time->fetch(PDO::FETCH_ASSOC);
+        $created_at = $time_row ? $time_row['created_at'] : date('Y-m-d H:i:s');
 
         // last_message 업데이트
         $stmt4 = $db->prepare("
@@ -97,8 +110,35 @@ try {
 
     $db->commit();
 
+    // ────────────────────────────────────────────────────────────
+    // 트랜잭션 커밋 후 WebSocket emit
+    // ────────────────────────────────────────────────────────────
+    
+    // owner를 제외한 멤버들에게 room_joined 알림
+    foreach ($all_members as $uid) {
+        if ($uid !== $owner_id) {
+            emit_to_user($uid, 'room_joined', [
+                'room_id'   => $room_id,
+                'room_type' => $room_type,
+                'room_name' => $room_name
+            ]);
+        }
+    }
+    
+    // 그룹방이고 시스템 메시지가 있으면 message 이벤트로 broadcast
+    if ($room_type === 'group' && $message_id) {
+        emit_to_room($room_id, 'message', [
+            'room_id'    => $room_id,
+            'message_id' => $message_id,
+            'msg_type'   => 'system',
+            'sender_id'  => null,
+            'content'    => '채팅방이 생성되었습니다.',
+            'created_at' => $created_at
+        ]);
+    }
+
     sendSuccess('채팅방 생성 성공', [
-        'room_id'        => intval($room_id),
+        'room_id'        => $room_id,
         'room_type'      => $room_type,
         'already_exists' => false
     ]);

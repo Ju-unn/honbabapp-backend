@@ -34,6 +34,7 @@
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/socket_emit.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -152,6 +153,9 @@ try {
 
     // 7. 채팅방 자동 생성 or 멤버 추가
     $room_id = null;
+    $room_name = null;
+    $new_room_created = false;
+    $member_added = false;
 
     if ($action === 'approve') {
         $meeting_id   = $participant['meeting_id'];
@@ -165,7 +169,7 @@ try {
         $approved_nickname = $approved_user ? $approved_user['user_nickname'] : '참여자';
 
         // 7-2. 이 모임의 채팅방이 이미 있는지 확인
-        $room_check = $db->prepare("SELECT room_id FROM chat_rooms WHERE meeting_id = :mid LIMIT 1");
+        $room_check = $db->prepare("SELECT room_id, room_name FROM chat_rooms WHERE meeting_id = :mid LIMIT 1");
         $room_check->bindParam(':mid', $meeting_id);
         $room_check->execute();
         $existing_room = $room_check->fetch(PDO::FETCH_ASSOC);
@@ -201,6 +205,7 @@ try {
             $create_room->bindParam(':owner',  $host_id);
             $create_room->execute();
             $room_id = (int)$db->lastInsertId();
+            $new_room_created = true;
             
             // 방장 멤버 추가
             $add_host = $db->prepare(
@@ -252,6 +257,7 @@ try {
             // ── CASE B: 채팅방 이미 있음 → 멤버만 추가 ──────────────
 
             $room_id = (int)$existing_room['room_id'];
+            $room_name = $existing_room['room_name'];
 
             // 이미 멤버인지 확인 (중복 방지)
             $mem_check = $db->prepare(
@@ -280,6 +286,7 @@ try {
                 $msg3->bindParam(':rid', $room_id);
                 $msg3->bindParam(':content', $sys3);
                 $msg3->execute();
+                $message_id = (int)$db->lastInsertId();
 
                 // chat_rooms 마지막 메시지 업데이트
                 $upd2 = $db->prepare(
@@ -288,19 +295,71 @@ try {
                 $upd2->bindParam(':lm',  $sys3);
                 $upd2->bindParam(':rid', $room_id);
                 $upd2->execute();
+
+                $member_added = true;
             }
             // 이미 멤버면 아무것도 하지 않음
         }
-    
-
     }
 
-
-
-    
     // 트랜잭션 커밋
     $db->commit();
-    
+
+    // ────────────────────────────────────────────────────────────
+    // 트랜잭션 커밋 후 WebSocket emit
+    // ────────────────────────────────────────────────────────────
+    if ($action === 'approve' && $room_id && $room_name) {
+        
+        if ($new_room_created) {
+            // CASE A: 신규 방 생성 → 신청자에게만 room_joined 알림
+            emit_to_user($approved_uid, 'room_joined', [
+                'room_id'   => $room_id,
+                'room_type' => 'group',
+                'room_name' => $room_name
+            ]);
+            
+        } else if ($member_added) {
+            // CASE B: 기존 방에 멤버 추가됨 → 신청자 + 기존 멤버들에게 알림
+            
+            // 1) 신청자에게 room_joined
+            emit_to_user($approved_uid, 'room_joined', [
+                'room_id'   => $room_id,
+                'room_type' => 'group',
+                'room_name' => $room_name
+            ]);
+            
+            // 2) 방의 기존 멤버들에게 member_joined
+            emit_to_room($room_id, 'member_joined', [
+                'room_id'  => $room_id,
+                'user_id'  => $approved_uid,
+                'nickname' => $approved_nickname
+            ]);
+            
+            // 3) 시스템 메시지를 message 이벤트로 broadcast
+            // message_id, created_at 조회
+            $msg_stmt = $db->prepare(
+                "SELECT message_id, created_at 
+                 FROM chat_messages 
+                 WHERE room_id = :rid AND msg_type = 'system' 
+                 ORDER BY created_at DESC LIMIT 1"
+            );
+            $msg_stmt->bindParam(':rid', $room_id);
+            $msg_stmt->execute();
+            $msg_row = $msg_stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($msg_row) {
+                emit_to_room($room_id, 'message', [
+                    'room_id'    => $room_id,
+                    'message_id' => (int)$msg_row['message_id'],
+                    'msg_type'   => 'system',
+                    'sender_id'  => null,
+                    'content'    => $approved_nickname . '님이 초대되었습니다.',
+                    'created_at' => $msg_row['created_at']
+                ]);
+            }
+        }
+    }
+
     $message = ($action === 'approve') ? '참여 신청을 승인했습니다' : '참여 신청을 거절했습니다';
     
     $response_data = [

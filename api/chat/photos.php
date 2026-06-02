@@ -100,6 +100,7 @@ try {
         SELECT
             cm.message_id,
             cm.image_url,
+            cm.image_urls,
             cm.sender_id,
             u.user_nickname AS sender_name,
             cm.created_at
@@ -114,13 +115,46 @@ try {
     $photos = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // ───────────────────────────────────────
-    // 6) 타입 변환 (PDO 는 모든 컬럼을 문자열로 반환)
+    // 6) image_urls 펼치기 + 타입 변환
+    //    묶음 메시지 1개 → 사진 N개 엔트리로 분해
+    //    (같은 message_id/sender/created_at 공유, image_url 만 각각)
     // ───────────────────────────────────────
-    foreach ($photos as &$photo) {
-        $photo['message_id'] = intval($photo['message_id']);
-        $photo['sender_id']  = $photo['sender_id'] !== null ? intval($photo['sender_id']) : null;
+
+    // ───────────────────────────────────────
+    // 6) image_urls 펼치기 + 타입 변환
+    //    묶음 메시지 1개 → 사진 N개 엔트리로 분해
+    //    (같은 message_id/sender/created_at 공유, image_url 만 각각)
+    // ───────────────────────────────────────
+    $expanded = [];
+    foreach ($photos as $photo) {
+        $mid   = intval($photo['message_id']);
+        $sid   = $photo['sender_id'] !== null ? intval($photo['sender_id']) : null;
+        $sname = $photo['sender_name'];
+        $cat   = $photo['created_at'];
+
+        // image_urls 정규화: 신규 묶음 → 배열, 구버전 → 단일 폴백
+        $urls = [];
+        if (!empty($photo['image_urls'])) {
+            $decoded = json_decode($photo['image_urls'], true);
+            if (is_array($decoded)) $urls = $decoded;
+        }
+        if (empty($urls) && !empty($photo['image_url'])) {
+            $urls = [$photo['image_url']];
+        }
+
+        // 각 URL을 개별 엔트리로 펼침
+        foreach ($urls as $url) {
+            $expanded[] = [
+                'message_id'  => $mid,
+                'image_url'   => $url,
+                'sender_id'   => $sid,
+                'sender_name' => $sname,
+                'created_at'  => $cat,
+            ];
+        }
     }
-    unset($photo); // foreach 참조 해제 (PHP 관례)
+    $photos = $expanded;
+        
 
     // ───────────────────────────────────────
     // 7) has_more 계산

@@ -163,14 +163,26 @@ io.on('connection', (socket) => {
   //
   socket.on('message', async (data) => {
     // msg_type 기본값 'text'
-    const msg_type  = data.msg_type === 'image' ? 'image' : 'text';
-    const image_url = msg_type === 'image' ? (data.image_url || null) : null;
+    const msg_type = data.msg_type === 'image' ? 'image' : 'text';
 
-    // 이미지 메시지인데 image_url 없으면 거부
-    if (msg_type === 'image' && !image_url) {
-      console.error('이미지 메시지인데 image_url 없음, 무시');
+    // image_urls 배열 파싱 (신규 다중 이미지)
+    // 구버전 클라이언트 호환: image_urls 없으면 image_url 단일값으로 폴백
+    let urls = [];
+    if (Array.isArray(data.image_urls)) {
+      urls = data.image_urls.filter(Boolean);
+    }
+    if (urls.length === 0 && data.image_url) {
+      urls = [data.image_url];
+    }
+    
+    // 이미지 메시지인데 URL이 하나도 없으면 거부
+    if (msg_type === 'image' && urls.length === 0) {
+      console.error('이미지 메시지인데 image_url/image_urls 없음, 무시');
       return;
     }
+    
+    const image_url = msg_type === 'image' ? urls[0] : null;
+    const image_urls = msg_type === 'image' ? JSON.stringify(urls) : null;
 
     // last_message 표시용 텍스트
     //   - 이미지: '사진' 으로 고정
@@ -187,8 +199,8 @@ io.on('connection', (socket) => {
     try {
       // 1) INSERT — image_url 컬럼까지 채워넣음
       const [result] = await pool.execute(
-        'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, image_url, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        [data.room_id, data.user_id, msg_type, contentForDB, image_url],
+        'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, image_url, image_urls, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
+        [data.room_id, data.user_id, msg_type, contentForDB, image_url, image_urls],
       );
 
       const [rows] = await pool.execute(
@@ -207,10 +219,13 @@ io.on('connection', (socket) => {
       );
 
       // fan-out payload 구성
-      data.message_id = result.insertId;
-      data.msg_type   = msg_type;   // 클라이언트가 분기할 수 있게 응답에 명시
-      data.image_url  = image_url;  // 텍스트 메시지면 null
-      data.content    = contentForDB;
+      data.message_id  = result.insertId;
+      data.msg_type    = msg_type;
+      data.image_url   = image_url;        
+      data.image_urls  = urls;   
+      data.content     = contentForDB;
+      
+      // client_msg_id는 들어온 값 그대로 echo (지우지 않음)
 
       // 파싱문제로 파싱해서 db로 전달
       const rawDate = rows[0].created_at;

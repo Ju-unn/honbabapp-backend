@@ -64,6 +64,7 @@ try {
             cm.msg_type,
             cm.content,
             cm.image_url,
+            cm.image_urls,
             cm.created_at,
             (
                 SELECT COUNT(*)
@@ -88,6 +89,15 @@ try {
         $msg['unread_count'] = ($member_count - 1) - intval($msg['read_count']);
         if ($msg['unread_count'] < 0) $msg['unread_count'] = 0;
         unset($msg['read_count']); // read_count는 내부 계산용이므로 제거
+
+        // image_urls 정규화: NULL이면 image_url 단일값으로 폴백 
+        if (!empty($msg['image_urls'])) {
+            $msg['image_urls'] = json_decode($msg['image_urls'], true);
+        } elseif (!empty($msg['image_url'])) {
+            $msg['image_urls'] = [$msg['image_url']];
+        } else {
+            $msg['image_urls'] = [];
+        }
     }
 
     // 오래된 순으로 뒤집기 (화면에서 위→아래 시간순)

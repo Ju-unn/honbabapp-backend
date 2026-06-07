@@ -90,6 +90,7 @@ class Database {
         $this->username,
         $this->password
       );
+      $this->conn->exec("SET time_zone = '+9:00'");
       $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     } catch(PDOException $e) {
       // 연결 실패 시 null 반환 (에러는 호출하는 쪽에서 처리)

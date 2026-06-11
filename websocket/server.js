@@ -12,6 +12,10 @@ const pool = mysql.createPool({
   timezone: 'Z',
 });
 
+pool.pool.on('connection', (conn) => {
+  conn.query("SET time_zone='+09:00'");
+});
+
 const io = new Server(3000, { cors: { origin: '*' } });
 console.log('서버 켜짐! 포트 3000');
 
@@ -266,8 +270,7 @@ io.on('connection', (socket) => {
       const [unreadMessages] = await pool.execute(`
         SELECT cm.message_id FROM chat_messages cm
         WHERE cm.room_id = ?
-          AND cm.sender_id != ?
-          AND cm.sender_id IS NOT NULL
+          AND (cm.sender_id != ? OR cm.sender_id IS NULL)
           AND cm.message_id NOT IN (
             SELECT message_id FROM chat_message_reads WHERE user_id = ?
           )

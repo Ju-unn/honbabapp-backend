@@ -41,7 +41,7 @@ try {
     // 이 방의 모든 메시지 ID 조회 (내가 보낸 것 제외)
     $stmt = $db->prepare("
         SELECT message_id FROM chat_messages
-        WHERE room_id = ? AND sender_id != ?
+        WHERE room_id = ? AND (sender_id != ? OR sender_id IS NULL)
     ");
     $stmt->execute([$room_id, $user_id]);
     $message_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);

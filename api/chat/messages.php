@@ -74,7 +74,7 @@ try {
         FROM chat_messages cm
         LEFT JOIN users u ON cm.sender_id = u.user_id
         WHERE cm.room_id = ?
-        ORDER BY cm.created_at DESC
+        ORDER BY cm.message_id DESC
         LIMIT $limit OFFSET $offset
     ");
     $stmt->execute([$room_id]);

@@ -22,6 +22,7 @@
 require_once '../config/database.php';
 require_once '../utils/response.php';
 require_once '../utils/socket_emit.php';
+require_once '../utils/push_emit.php';
 
 // ───────────────────────────────────────────
 // 1) 요청 검증
@@ -212,6 +213,13 @@ try {
     // 11) COMMIT
     // ───────────────────────────────────────
     $db->commit();
+
+    // ───────────────────────────────────────
+    // 11-1) 푸시 알림: 강퇴된 사용자에게 발송 (fire-and-forget)
+    // ───────────────────────────────────────
+    push_to_user($target_user_id, 'chat_kicked', '채팅방 강퇴', '채팅방에서 강퇴되었습니다', [
+        'room_id' => $room_id,
+    ]);
 
     // ───────────────────────────────────────
     // 12) WebSocket broadcast

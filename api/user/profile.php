@@ -34,7 +34,8 @@ try {
                 user_participation_count ,
                 user_email ,
                 user_birthday ,
-                user_gender
+                user_gender ,
+                push_enabled
                 FROM users
                 WHERE user_id = :user_id";
 
@@ -52,6 +53,8 @@ $user = $stmt->fetch(PDO::FETCH_ASSOC);
 // manner_score 소수점이므로 float 변환
 $user['user_manner_score'] = (float)$user['user_manner_score'];
 $user['user_participation_count'] = (int)$user['user_participation_count'];
+// push_enabled 는 tinyint(1) → 0/1 정수로 변환 (앱 알림 설정 화면에서 사용)
+$user['push_enabled'] = (int)$user['push_enabled'];
 
 sendSuccess('프로필 조회 성공' , $user);
 

@@ -36,6 +36,7 @@
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/push_emit.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -200,6 +201,20 @@ try {
     $reviewee_new_manner_score = (float)$score_stmt->fetchColumn();
 
     $db->commit();
+
+    // ─────────────────────────────────────────────
+    // 5. 푸시 알림: reviewee 에게 "새 후기" 알림 발송 (fire-and-forget)
+    //    reviewer 닉네임은 알림 문구에만 쓰이므로, 푸시 발송 실패가
+    //    후기 등록 자체(이미 commit 완료)에는 영향을 주지 않는다.
+    // ─────────────────────────────────────────────
+    $reviewer_nickname_stmt = $db->prepare("SELECT user_nickname FROM users WHERE user_id = :reviewer_id");
+    $reviewer_nickname_stmt->bindParam(':reviewer_id', $reviewer_id, PDO::PARAM_INT);
+    $reviewer_nickname_stmt->execute();
+    $reviewer_nickname = (string)$reviewer_nickname_stmt->fetchColumn();
+
+    push_to_user($reviewee_id, 'review_received', '새 후기', $reviewer_nickname . '님이 후기를 남겼어요', [
+        'meeting_id' => $meeting_id,
+    ]);
 
     sendSuccess('후기가 등록되었습니다', [
         'review_id'                  => $review_id,

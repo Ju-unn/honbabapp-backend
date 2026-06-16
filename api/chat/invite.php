@@ -2,6 +2,7 @@
 require_once '../config/database.php';
 require_once '../utils/response.php';
 require_once '../utils/socket_emit.php';
+require_once '../utils/push_emit.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -106,6 +107,13 @@ try {
     $created_at = $msg_row ? $msg_row['created_at'] : date('Y-m-d H:i:s');
 
     $db->commit();
+
+    // ────────────────────────────────────────────────────────────
+    // 푸시 알림: 초대된 사용자에게 발송 (fire-and-forget)
+    // ────────────────────────────────────────────────────────────
+    push_to_user($target_user_id, 'chat_invite', '채팅방 초대', $room_name . ' 방에 초대되었어요', [
+        'room_id' => $room_id,
+    ]);
 
     // ────────────────────────────────────────────────────────────
     // 트랜잭션 커밋 후 WebSocket emit

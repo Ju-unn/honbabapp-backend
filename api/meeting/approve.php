@@ -35,6 +35,7 @@
 require_once '../config/database.php';
 require_once '../utils/response.php';
 require_once '../utils/socket_emit.php';
+require_once '../utils/push_emit.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -304,6 +305,17 @@ try {
 
     // 트랜잭션 커밋
     $db->commit();
+
+    // ────────────────────────────────────────────────────────────
+    // 푸시 알림: 신청자에게 승인/거절 결과 통보 (fire-and-forget)
+    // ────────────────────────────────────────────────────────────
+    if ($action === 'approve') {
+        push_to_user($participant['user_id'], 'meeting_approved', '모임 참여 승인',
+            '모임 참여가 승인되었어요', ['meeting_id' => $participant['meeting_id']]);
+    } else {
+        push_to_user($participant['user_id'], 'meeting_rejected', '모임 참여 거절',
+            '참여 신청이 거절되었어요', ['meeting_id' => $participant['meeting_id']]);
+    }
 
     // ────────────────────────────────────────────────────────────
     // 트랜잭션 커밋 후 WebSocket emit

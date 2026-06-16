@@ -1,6 +1,7 @@
 const { Server } = require('socket.io');
 const mysql = require('mysql2/promise');
 const cron = require('node-cron');
+const admin = require('firebase-admin');
 require('dotenv').config({ path: '/var/www/html/.env' });
 
 const pool = mysql.createPool({
@@ -19,6 +20,27 @@ pool.pool.on('connection', (conn) => {
 
 const io = new Server(3000, { cors: { origin: '*' } });
 console.log('서버 켜짐! 포트 3000');
+
+// ═══════════════════════════════════════════════════════════════
+//   FCM(Firebase Cloud Messaging) 초기화
+//
+//   서비스 계정 JSON 경로는 env(FIREBASE_SA_PATH)에서 로드하며,
+//   미설정 시 기본 경로(/var/www/html/firebase-service-account.json)를 사용.
+//   초기화 실패해도 서버 자체는 계속 동작해야 하므로 throw 하지 않고
+//   로그만 남긴다 (이후 푸시 발송 호출은 모두 try/catch로 보호됨).
+// ═══════════════════════════════════════════════════════════════
+const FIREBASE_SERVICE_ACCOUNT_PATH =
+  process.env.FIREBASE_SA_PATH ||
+  '/var/www/html/firebase-service-account.json';
+
+try {
+  admin.initializeApp({
+    credential: admin.credential.cert(require(FIREBASE_SERVICE_ACCOUNT_PATH)),
+  });
+  console.log('[push] firebase-admin 초기화 완료');
+} catch (err) {
+  console.error('[push] firebase-admin 초기화 실패:', err.message);
+}
 
 // ═══════════════════════════════════════════════════════════════
 //   fanOutToRoom — 특정 room의 멤버 전원에게 이벤트 전송
@@ -44,9 +66,125 @@ async function fanOutToRoom(room_id, event, payload) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//   HTTP /emit, /emit_user 엔드포인트 (PHP → Node.js broadcast 요청 수신용)
+//   FCM 푸시 발송 헬퍼
 //
-//   사용처: api/utils/socket_emit.php
+//   buildFcmDataPayload({type, title, body, data})
+//     - FCM data 메시지는 모든 필드가 string이어야 하므로 변환 담당
+//
+//   sendPushToUsers(userIds, {type, title, body, data})
+//     - userIds 중 fcm_token IS NOT NULL AND push_enabled = 1 인 사용자만 조회
+//     - admin.messaging().sendEachForMulticast() 로 data-only 메시지 일괄 발송
+//       (포그라운드 억제·딥링크 제어를 위해 notification 필드는 사용하지 않음)
+//     - 응답 중 'messaging/registration-token-not-registered' 인 토큰은
+//       users.fcm_token = NULL 로 정리
+//     - 반환값: 발송 성공 건수
+//
+//   sendPushToRoom(room_id, sender_id, {type, title, body, data})
+//     - chat_room_members 에서 room_id 멤버 조회, sender_id 제외 후
+//       sendPushToUsers 호출
+//
+//   두 함수 모두 내부에서 에러를 잡아 로그만 남기고 0을 반환한다.
+//   호출부에서는 await 하지 않는 발사-후-망각(fire-and-forget) 방식으로
+//   사용하므로, 푸시 실패가 채팅/후기 흐름 자체를 막아서는 안 된다.
+// ═══════════════════════════════════════════════════════════════
+
+function buildFcmDataPayload({ type, title, body, data = {} }) {
+  const payload = {
+    type: String(type ?? ''),
+    title: String(title ?? ''),
+    body: String(body ?? ''),
+  };
+
+  for (const [key, value] of Object.entries(data)) {
+    payload[key] = String(value);
+  }
+
+  return payload;
+}
+
+async function sendPushToUsers(userIds, { type, title, body, data = {} }) {
+  if (!Array.isArray(userIds) || userIds.length === 0) {
+    return 0;
+  }
+
+  try {
+    const placeholders = userIds.map(() => '?').join(',');
+    const [rows] = await pool.execute(
+      `SELECT user_id, fcm_token FROM users
+       WHERE user_id IN (${placeholders})
+         AND fcm_token IS NOT NULL
+         AND push_enabled = 1`,
+      userIds,
+    );
+
+    if (rows.length === 0) {
+      return 0;
+    }
+
+    const tokens = rows.map((row) => row.fcm_token);
+    const fcmDataPayload = buildFcmDataPayload({ type, title, body, data });
+
+    const response = await admin.messaging().sendEachForMulticast({
+      tokens,
+      data: fcmDataPayload,
+      android: { priority: 'high' },
+    });
+
+    // 무효 토큰(앱 삭제/재설치 등) 정리
+    const invalidTokens = [];
+    response.responses.forEach((result, idx) => {
+      if (
+        !result.success &&
+        result.error?.code ===
+          'messaging/registration-token-not-registered'
+      ) {
+        invalidTokens.push(tokens[idx]);
+      }
+    });
+
+    if (invalidTokens.length > 0) {
+      const tokenPlaceholders = invalidTokens.map(() => '?').join(',');
+      await pool.execute(
+        `UPDATE users SET fcm_token = NULL WHERE fcm_token IN (${tokenPlaceholders})`,
+        invalidTokens,
+      );
+      console.log(`[push] 무효 토큰 ${invalidTokens.length}개 정리`);
+    }
+
+    console.log(
+      `[push] type=${type} 대상=${tokens.length} 성공=${response.successCount} 실패=${response.failureCount}`,
+    );
+
+    return response.successCount;
+  } catch (err) {
+    console.error('[push] sendPushToUsers 실패:', err.message);
+    return 0;
+  }
+}
+
+async function sendPushToRoom(room_id, sender_id, { type, title, body, data = {} }) {
+  try {
+    const [members] = await pool.execute(
+      'SELECT user_id FROM chat_room_members WHERE room_id = ?',
+      [room_id],
+    );
+
+    const targetUserIds = members
+      .map((member) => member.user_id)
+      .filter((userId) => userId !== sender_id);
+
+    return await sendPushToUsers(targetUserIds, { type, title, body, data });
+  } catch (err) {
+    console.error('[push] sendPushToRoom 실패:', err.message);
+    return 0;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//   HTTP /emit, /emit_user, /push_user, /push_room 엔드포인트
+//   (PHP → Node.js broadcast / push 요청 수신용)
+//
+//   사용처: api/utils/socket_emit.php, api/utils/push_emit.php
 //
 //   /emit        : 방 전체 fan-out (chat_room_members 기준)
 //                  POST { "room_id": 5, "event": "member_left", "payload": {...} }
@@ -54,8 +192,17 @@ async function fanOutToRoom(room_id, event, payload) {
 //   /emit_user   : 특정 user 1명에게 직접 (강퇴 알림 등)
 //                  POST { "user_id": 7, "event": "kicked", "payload": {...} }
 //
+//   /push_user   : 특정 user(들)에게 FCM 푸시
+//                  POST { "user_ids": [7], "type": "review_received",
+//                         "title": "새 후기", "body": "...", "data": {...} }
+//
+//   /push_room   : 방 멤버 전원(발신자 제외)에게 FCM 푸시
+//                  POST { "room_id": 5, "exclude_user_id": 3, "type": "...",
+//                         "title": "...", "body": "...", "data": {...} }
+//
 //   응답: { "success": true, "broadcasted_to": 3 }  (room fan-out)
 //        { "success": true, "target_user_id": 7 }  (user 직접)
+//        { "success": true, "sent": 2 }            (push_user / push_room)
 //
 // ═══════════════════════════════════════════════════════════════
 
@@ -63,13 +210,15 @@ async function fanOutToRoom(room_id, event, payload) {
 const socketIoRequestListeners = io.httpServer.listeners('request').slice();
 io.httpServer.removeAllListeners('request');
 
-// 2) 우리가 라우팅 통합 담당
+// 2)  라우팅 통합 담당
 io.httpServer.on('request', (req, res) => {
   const isEmitRoom = req.url === '/emit' && req.method === 'POST';
   const isEmitUser = req.url === '/emit_user' && req.method === 'POST';
+  const isPushUser = req.url === '/push_user' && req.method === 'POST';
+  const isPushRoom = req.url === '/push_room' && req.method === 'POST';
 
   // ─── 우리 라우트가 아니면 socket.io 기본 핸들러로 위임 ───
-  if (!isEmitRoom && !isEmitUser) {
+  if (!isEmitRoom && !isEmitUser && !isPushUser && !isPushRoom) {
     for (const listener of socketIoRequestListeners) {
       listener.call(io.httpServer, req, res);
     }
@@ -84,6 +233,89 @@ io.httpServer.on('request', (req, res) => {
   req.on('end', async () => {
     try {
       const data = JSON.parse(body);
+
+      // ───────────────────────────────────────
+      // ROUTE C) /push_user — 특정 user(들)에게 푸시
+      //   body: { user_ids: [...], type, title, body, data }
+      // ───────────────────────────────────────
+      if (isPushUser) {
+        const userIds = Array.isArray(data.user_ids)
+          ? data.user_ids.map((id) => parseInt(id)).filter((id) => !!id)
+          : [];
+
+        if (userIds.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(
+            JSON.stringify({
+              success: false,
+              error: 'user_ids 가 필요합니다',
+            }),
+          );
+        }
+
+        const sentCount = await sendPushToUsers(userIds, {
+          type: data.type,
+          title: data.title,
+          body: data.body,
+          data: data.data || {},
+        });
+
+        console.log(
+          `[/push_user] users=[${userIds.join(',')}] type=${data.type} → ${sentCount}건 발송`,
+        );
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(
+          JSON.stringify({
+            success: true,
+            sent: sentCount,
+          }),
+        );
+      }
+
+      // ───────────────────────────────────────
+      // ROUTE D) /push_room — 방 멤버 전원(발신자 제외)에게 푸시
+      //   body: { room_id, exclude_user_id, type, title, body, data }
+      // ───────────────────────────────────────
+      if (isPushRoom) {
+        const room_id = parseInt(data.room_id);
+        if (!room_id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(
+            JSON.stringify({
+              success: false,
+              error: 'room_id 가 필요합니다',
+            }),
+          );
+        }
+
+        const excludeUserId = data.exclude_user_id
+          ? parseInt(data.exclude_user_id)
+          : null;
+
+        const sentCount = await sendPushToRoom(room_id, excludeUserId, {
+          type: data.type,
+          title: data.title,
+          body: data.body,
+          data: data.data || {},
+        });
+
+        console.log(
+          `[/push_room] room=${room_id} type=${data.type} → ${sentCount}건 발송`,
+        );
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(
+          JSON.stringify({
+            success: true,
+            sent: sentCount,
+          }),
+        );
+      }
+
+      // ───────────────────────────────────────
+      // 이하 /emit, /emit_user 는 event 필드 필요
+      // ───────────────────────────────────────
       const event = data.event;
       const payload = data.payload || {};
 
@@ -290,6 +522,19 @@ io.on('connection', (socket) => {
 
       // 3) fan-out: room_id 대신 멤버 각자의 user_채널로 전송 (헬퍼 함수 재사용)
       await fanOutToRoom(data.room_id, 'message', data);
+
+      // 4) FCM 푸시 발송 — 백그라운드/다른 방을 보고 있는 멤버 대상
+      //    fire-and-forget (await 하지 않음, 실패해도 메시지 저장/fan-out은 이미 완료)
+      //    포그라운드에서 현재 이 방을 보고 있는 멤버는 앱(FirebaseInstanceIdService)에서
+      //    onMessageReceived 단계에서 알림 표시를 억제한다.
+      sendPushToRoom(data.room_id, data.user_id, {
+        type: 'chat',
+        title: data.sender_name || '새 메시지',
+        body: lastMessageText,
+        data: { room_id: data.room_id, message_id: data.message_id },
+      }).catch((err) =>
+        console.error('[push] chat 발송 실패:', err.message),
+      );
     } catch (err) {
       console.error('DB 저장 실패:', err.message);
     }
@@ -465,6 +710,16 @@ async function sendReviewNotices() {
 
       console.log(
         `[review-notice] meeting=${meeting_id} room=${room_id} → ${count}명 발송`,
+      );
+
+      // FCM 푸시 발송 — fire-and-forget (실패해도 system 메시지 발송 자체는 완료된 상태)
+      sendPushToRoom(room_id, null, {
+        type: 'review_prompt',
+        title: '후기 작성',
+        body: '모임은 어떠셨나요? 후기를 남겨주세요!',
+        data: { room_id, meeting_id },
+      }).catch((err) =>
+        console.error('[push] review_prompt 발송 실패:', err.message),
       );
     } catch (err) {
       // 한 모임 처리 실패가 전체 틱을 죽이지 않도록

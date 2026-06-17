@@ -39,6 +39,12 @@ try {
         sendError('사용자를 찾을 수 없습니다', 404);
     }
 
+    $clearOtherUserTokenStatement = $db->prepare(
+        'UPDATE users SET fcm_token = NULL, fcm_token_updated_at = NOW() WHERE fcm_token = ? AND user_id <> ?'
+    );
+    $clearOtherUserTokenStatement->execute([$fcmToken, $userId]);
+ 
+    // 현재 사용자에게 토큰 등록
     $updateStatement = $db->prepare(
         'UPDATE users SET fcm_token = ?, fcm_token_updated_at = NOW() WHERE user_id = ?'
     );

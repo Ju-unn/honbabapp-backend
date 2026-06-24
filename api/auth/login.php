@@ -1,6 +1,7 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
 
 // POST 요청만 허용
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -76,6 +77,10 @@ try {
     
     // 숫자(0/1)를 boolean으로 변환
     $user['user_email_verified'] = (bool)$user['user_email_verified'];
+    
+    // JWT 토큰 발급
+    $access_token = generate_jwt($user['user_id']);
+    $user['token'] = $access_token;
     
     // 성공 응답
     sendSuccess('로그인 성공', $user);

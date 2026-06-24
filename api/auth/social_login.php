@@ -1,0 +1,209 @@
+<?php
+require_once '../config/database.php';
+require_once '../utils/response.php';
+require_once '../utils/jwt.php';
+require_once 'social_providers.php';
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    sendError('POST 요청만 허용됩니다', 405);
+}
+
+$input = json_decode(file_get_contents('php://input'), true);
+
+// 1. 입력 검증
+// 구글은 id_token, 카카오는 access_token을 사용하므로 둘 다 허용
+if (empty($input['provider'])) {
+    sendError('provider가 필요합니다');
+}
+
+$provider = trim($input['provider']);
+$credential = trim($input['access_token'] ?? $input['id_token'] ?? '');
+
+if (empty($credential)) {
+    sendError('access_token 또는 id_token이 필요합니다');
+}
+
+$allowed_providers = ['kakao', 'google'];
+if (!in_array($provider, $allowed_providers)) {
+    sendError('지원하지 않는 provider입니다');
+}
+
+// 2. DB 연결 (먼저 연결해야 .env의 환경변수들이 로딩됨)
+$database = new Database();
+$db = $database->getConnection();
+
+if ($db === null) {
+    sendError('데이터베이스 연결에 실패했습니다', 500);
+}
+
+// 3. provider별 사용자 정보 조회
+$social_user_info = null;
+if ($provider === 'kakao') {
+    $social_user_info = get_kakao_user_info($credential);
+} elseif ($provider === 'google') {
+    $social_user_info = get_google_user_info($credential);
+}
+
+if ($social_user_info === null) {
+    sendError('소셜 로그인 인증에 실패했습니다. 토큰을 확인해주세요', 401);
+}
+
+$provider_user_id = $social_user_info['provider_user_id'];
+$verified_email = $social_user_info['email'];
+$verified_phone = $social_user_info['phone_number'];
+$social_nickname = $social_user_info['nickname'];
+$social_profile_image = $social_user_info['profile_image'];
+
+try {
+    $db->beginTransaction();
+
+    $user_id = null;
+    $is_new_user = false;
+
+    // ───────────────────────────────────────────────
+    // 시나리오 1: 이미 연결된 소셜 계정인지 확인 (재로그인)
+    // ───────────────────────────────────────────────
+    $check_social_query = "SELECT user_id FROM social_accounts 
+                            WHERE provider = :provider AND provider_user_id = :provider_user_id";
+    $check_social_stmt = $db->prepare($check_social_query);
+    $check_social_stmt->bindParam(':provider', $provider);
+    $check_social_stmt->bindParam(':provider_user_id', $provider_user_id);
+    $check_social_stmt->execute();
+
+    if ($check_social_stmt->rowCount() > 0) {
+        // 기존 회원 - 바로 로그인
+        $existing_social = $check_social_stmt->fetch(PDO::FETCH_ASSOC);
+        $user_id = $existing_social['user_id'];
+    } else {
+        // ───────────────────────────────────────────────
+        // 시나리오 2: 검증된 이메일로 기존 users 조회 (계정 통합)
+        // ───────────────────────────────────────────────
+        if ($verified_email !== null) {
+            $check_email_query = "SELECT user_id FROM users WHERE user_email = :email";
+            $check_email_stmt = $db->prepare($check_email_query);
+            $check_email_stmt->bindParam(':email', $verified_email);
+            $check_email_stmt->execute();
+
+            if ($check_email_stmt->rowCount() > 0) {
+                $existing_user = $check_email_stmt->fetch(PDO::FETCH_ASSOC);
+                $user_id = $existing_user['user_id'];
+            }
+        }
+
+        // ───────────────────────────────────────────────
+        // 시나리오 3: 검증된 전화번호로 기존 users 조회 (계정 통합)
+        // ───────────────────────────────────────────────
+        if ($user_id === null && $verified_phone !== null) {
+            $check_phone_query = "SELECT user_id FROM users WHERE user_phone_number = :phone";
+            $check_phone_stmt = $db->prepare($check_phone_query);
+            $check_phone_stmt->bindParam(':phone', $verified_phone);
+            $check_phone_stmt->execute();
+
+            if ($check_phone_stmt->rowCount() > 0) {
+                $existing_user = $check_phone_stmt->fetch(PDO::FETCH_ASSOC);
+                $user_id = $existing_user['user_id'];
+            }
+        }
+
+        // ───────────────────────────────────────────────
+        // 시나리오 4: 일치하는 계정이 없으면 완전 신규 가입
+        // ───────────────────────────────────────────────
+        if ($user_id === null) {
+            $is_new_user = true;
+
+            // 소셜에서 받은 닉네임이 이미 사용 중이면 null로 처리
+            // (온보딩 화면에서 사용자가 직접 고유한 닉네임을 입력하게 됨)
+            $final_nickname = null;
+            if ($social_nickname !== null) {
+                $check_nickname_query = "SELECT user_id FROM users WHERE user_nickname = :nickname";
+                $check_nickname_stmt = $db->prepare($check_nickname_query);
+                $check_nickname_stmt->bindParam(':nickname', $social_nickname);
+                $check_nickname_stmt->execute();
+
+                if ($check_nickname_stmt->rowCount() === 0) {
+                    // 중복 없음 - 소셜 닉네임 그대로 사용
+                    $final_nickname = $social_nickname;
+                }
+                // 중복 있으면 $final_nickname은 null로 유지 (온보딩에서 입력받음)
+            }
+
+            // 비밀번호가 NOT NULL이므로, 아무도 모르는 임의의 해시값을 채워넣음
+            $random_password_hash = password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT);
+
+            $insert_user_query = "INSERT INTO users 
+                                   (user_email, user_email_verified, user_password, user_nickname, 
+                                    user_profile_image, user_phone_number, user_status) 
+                                   VALUES 
+                                   (:email, :email_verified, :password, :nickname, 
+                                    :profile_image, :phone_number, '활성')";
+            $insert_user_stmt = $db->prepare($insert_user_query);
+            $insert_user_stmt->bindParam(':email', $verified_email);
+            $email_verified_flag = $verified_email !== null ? 1 : 0;
+            $insert_user_stmt->bindParam(':email_verified', $email_verified_flag);
+            $insert_user_stmt->bindParam(':password', $random_password_hash);
+            $insert_user_stmt->bindParam(':nickname', $final_nickname);
+            $insert_user_stmt->bindParam(':profile_image', $social_profile_image);
+            $insert_user_stmt->bindParam(':phone_number', $verified_phone);
+            $insert_user_stmt->execute();
+
+            $user_id = $db->lastInsertId();
+        }
+
+        // social_accounts에 연결 정보 저장 (신규가입이든 기존계정 연결이든 공통)
+        $insert_social_query = "INSERT INTO social_accounts 
+                                 (user_id, provider, provider_user_id, provider_email) 
+                                 VALUES 
+                                 (:user_id, :provider, :provider_user_id, :provider_email)";
+        $insert_social_stmt = $db->prepare($insert_social_query);
+        $insert_social_stmt->bindParam(':user_id', $user_id);
+        $insert_social_stmt->bindParam(':provider', $provider);
+        $insert_social_stmt->bindParam(':provider_user_id', $provider_user_id);
+        $insert_social_stmt->bindParam(':provider_email', $verified_email);
+        $insert_social_stmt->execute();
+    }
+
+    // 4. 최종 사용자 정보 조회
+    $user_query = "SELECT user_id, user_email, user_nickname, user_profile_image, 
+                          user_gender, user_birthday, user_location, user_phone_number,
+                          user_manner_score, user_participation_count, user_status,
+                          user_email_verified
+                   FROM users WHERE user_id = :user_id";
+    $user_stmt = $db->prepare($user_query);
+    $user_stmt->bindParam(':user_id', $user_id);
+    $user_stmt->execute();
+    $user = $user_stmt->fetch(PDO::FETCH_ASSOC);
+
+    // 계정 상태 확인 (탈퇴/정지 계정 방지)
+    if ($user['user_status'] !== '활성') {
+        $db->rollBack();
+        $msg = match ($user['user_status']) {
+            '탈퇴' => '탈퇴한 계정입니다',
+            '정지' => '정지된 계정입니다',
+            default => '접근이 제한된 계정입니다',
+        };
+        sendError($msg);
+    }
+
+    $db->commit();
+
+    // 5. 온보딩 필요 여부 판단 (닉네임 또는 위치가 비어있으면 온보딩 필요)
+    $needs_onboarding = empty($user['user_nickname']) || empty($user['user_location']);
+
+    // 6. JWT 발급
+    $access_token_jwt = generate_jwt($user['user_id']);
+    $user['token'] = $access_token_jwt;
+    $user['user_email_verified'] = (bool)$user['user_email_verified'];
+
+    $message = $is_new_user ? '소셜 회원가입이 완료되었습니다' : '소셜 로그인 성공';
+
+    sendSuccess($message, [
+        'user' => $user,
+        'needs_onboarding' => $needs_onboarding
+    ]);
+
+} catch (PDOException $e) {
+    $db->rollBack();
+    sendError('데이터베이스 오류: ' . $e->getMessage(), 500);
+}
+
+?>

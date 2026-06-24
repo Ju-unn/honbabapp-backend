@@ -4,10 +4,7 @@
  * GET /api/review/targets.php
  *
  * 채팅방의 "후기작성" 버튼을 눌렀을 때 호출.
- * - 이 모임에서 QR 인증을 완료한 사람(+ host_credited 호스트)만 "인증자 집합"이다.
- * - 요청자가 인증자 집합에 없으면 is_eligible=false (후기 작성 불가).
- * - targets는 인증자 집합에서 요청자 본인을 제외한 목록이며,
- *   이미 후기를 작성한 대상에는 already_reviewed=true 표시.
+ *
  *
  * 요청:
  * GET /api/review/targets.php?meeting_id=1&user_id=3
@@ -42,7 +39,7 @@ if (empty($_GET['meeting_id']) || empty($_GET['user_id'])) {
     sendError('meeting_id와 user_id는 필수입니다');
 }
 
-$meeting_id = intval($_GET['meeting_id']);
+$meeting_id      = intval($_GET['meeting_id']);
 $request_user_id = intval($_GET['user_id']);
 
 // DB 연결
@@ -55,7 +52,7 @@ if ($db === null) {
 
 try {
     // ─────────────────────────────────────────────
-    // 1. 모임의 QR 코드 정보 조회 (qr_id, host_credited)
+    // 1. 모임의 QR 코드 정보 조회 (qr_id, host_credited, meeting_host_id)
     //
     //    QR이 아직 생성되지 않았다면 인증자 집합이 존재할 수 없음
     //    → is_eligible=false, targets=[] 로 즉시 응답
@@ -76,18 +73,18 @@ try {
         ]);
     }
 
-    $qr_info = $qr_stmt->fetch(PDO::FETCH_ASSOC);
-    $qr_id          = intval($qr_info['qr_id']);
-    $host_credited  = intval($qr_info['host_credited']);
-    $host_id        = intval($qr_info['meeting_host_id']);
+    $qr_info       = $qr_stmt->fetch(PDO::FETCH_ASSOC);
+    $qr_id         = intval($qr_info['qr_id']);
+    $host_credited = intval($qr_info['host_credited']);
+    $host_id       = intval($qr_info['meeting_host_id']);
 
     // ─────────────────────────────────────────────
-    // 2. 인증자 집합 구성
+    // 2. 인증자 집합 구성 (is_eligible 판정에만 사용)
     //    - meeting_qr_scans 에 기록된 user_id 전체
     //    - host_credited = 1 이면 호스트도 인증자 집합에 포함
     // ─────────────────────────────────────────────
     $scan_query = "SELECT user_id FROM meeting_qr_scans WHERE qr_id = :qr_id";
-    $scan_stmt = $db->prepare($scan_query);
+    $scan_stmt  = $db->prepare($scan_query);
     $scan_stmt->bindParam(':qr_id', $qr_id, PDO::PARAM_INT);
     $scan_stmt->execute();
 
@@ -113,12 +110,39 @@ try {
     }
 
     // ─────────────────────────────────────────────
-    // 4. targets = 인증자 집합 - 요청자 본인
-    //    users 조인으로 닉네임/프로필 이미지,
-    //    meeting_reviews LEFT JOIN으로 already_reviewed 판단
+    // 4. 리뷰 대상 전체 집합 구성
+    //    = 승인된 참여자(meeting_participants) + 호스트(meeting_host_id)
+    //      − 요청자 본인
+    //
+    //    QR 인증 여부는 이 단계에서 고려하지 않음.
+    //    불참한(QR 미인증) 사람도 승인 참여자라면 리뷰 대상이 됨.
     // ─────────────────────────────────────────────
-    $target_ids = array_values(array_diff($verified_user_ids, [$request_user_id]));
+    $participant_query = "SELECT user_id
+                            FROM meeting_participants
+                           WHERE meeting_id = :meeting_id
+                             AND participation_status = '승인'";
 
+    $participant_stmt = $db->prepare($participant_query);
+    $participant_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+    $participant_stmt->execute();
+
+    $reviewable_user_ids = [];
+    while ($row = $participant_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $reviewable_user_ids[] = intval($row['user_id']);
+    }
+
+    // 호스트는 meeting_participants 에 행이 없을 수 있으므로 명시적으로 합집합 처리
+    if (!in_array($host_id, $reviewable_user_ids, true)) {
+        $reviewable_user_ids[] = $host_id;
+    }
+
+    // 요청자 본인 제외
+    $target_ids = array_values(array_diff($reviewable_user_ids, [$request_user_id]));
+
+    // ─────────────────────────────────────────────
+    // 5. target_ids → users 조인으로 닉네임/프로필,
+    //    meeting_reviews LEFT JOIN 으로 already_reviewed 판단
+    // ─────────────────────────────────────────────
     $targets = [];
 
     if (!empty($target_ids)) {
@@ -147,10 +171,10 @@ try {
 
         while ($row = $target_stmt->fetch(PDO::FETCH_ASSOC)) {
             $targets[] = [
-                'user_id'             => intval($row['user_id']),
-                'user_nickname'       => $row['user_nickname'],
-                'user_profile_image'  => $row['user_profile_image'],
-                'already_reviewed'    => (bool)intval($row['already_reviewed']),
+                'user_id'            => intval($row['user_id']),
+                'user_nickname'      => $row['user_nickname'],
+                'user_profile_image' => $row['user_profile_image'],
+                'already_reviewed'   => (bool)intval($row['already_reviewed']),
             ];
         }
     }

@@ -3,6 +3,10 @@
  * 후기 제출 API
  * POST /api/review/submit.php
  *
+ * - reviewer 검증: 인증자 집합(QR 찍은 사람) 유지
+ * - reviewee 검증: 인증자 집합 → 리뷰 가능 집합(승인된 참여자 + 호스트)으로 변경
+ *   → QR 미인증(불참) 상대에게도 낮은 별점으로 노쇼 리뷰를 남길 수 있음
+ *
  * 요청:
  * {
  *   "meeting_id": 1,
@@ -27,7 +31,8 @@
  *
  * 검증 순서:
  *   1. 파라미터 형식 (rating 1~5 정수, reviewer != reviewee, content 길이)
- *   2. reviewer/reviewee 둘 다 이 모임의 인증자 집합에 속하는지
+ *   2. reviewer: 인증자 집합(QR 인증자)에 속하는지 확인
+ *      reviewee: 리뷰 가능 집합(승인된 참여자 + 호스트)에 속하는지 확인
  *   3. 중복 제출 사전 체크
  *   4. 트랜잭션: meeting_reviews INSERT + users.user_manner_score 가산
  *
@@ -55,7 +60,7 @@ $reviewer_id = isset($input['reviewer_id']) ? intval($input['reviewer_id']) : 0;
 $reviewee_id = isset($input['reviewee_id']) ? intval($input['reviewee_id']) : 0;
 $rating      = isset($input['rating'])      ? intval($input['rating'])      : 0;
 
-// content: trim 후 빈 문자열이면 NULL, 500자 초과면 자르지 않고 에러
+// content: trim 후 빈 문자열이면 NULL, 500자 초과면 에러
 $content = isset($input['content']) ? trim((string)$input['content']) : '';
 if ($content === '') {
     $content = null;
@@ -85,10 +90,10 @@ if ($db === null) {
 
 try {
     // ─────────────────────────────────────────────
-    // 2. reviewer / reviewee 둘 다 인증자 집합에 속하는지 검증
+    // 2-A. QR 코드 정보 조회 — 인증자 집합 구성용
     //
-    //    인증자 집합 = meeting_qr_scans(qr_id) 의 user_id 전체
-    //                 + (host_credited=1 이면 meeting_host_id)
+    //      QR 자체가 없으면 아무도 인증한 사람이 없으므로
+    //      reviewer 가 인증자 집합에 속할 수 없음 → 즉시 거부
     // ─────────────────────────────────────────────
     $qr_query = "SELECT qr.qr_id, qr.host_credited, m.meeting_host_id
                   FROM meeting_qr_codes qr
@@ -108,8 +113,13 @@ try {
     $host_credited = intval($qr_info['host_credited']);
     $host_id       = intval($qr_info['meeting_host_id']);
 
+    // ─────────────────────────────────────────────
+    // 2-B. 인증자 집합 구성 (reviewer 검증용)
+    //      = meeting_qr_scans(qr_id) user_id 전체
+    //        + (host_credited=1 이면 meeting_host_id)
+    // ─────────────────────────────────────────────
     $scan_query = "SELECT user_id FROM meeting_qr_scans WHERE qr_id = :qr_id";
-    $scan_stmt = $db->prepare($scan_query);
+    $scan_stmt  = $db->prepare($scan_query);
     $scan_stmt->bindParam(':qr_id', $qr_id, PDO::PARAM_INT);
     $scan_stmt->execute();
 
@@ -122,23 +132,58 @@ try {
         $verified_user_ids[] = $host_id;
     }
 
-    if (!in_array($reviewer_id, $verified_user_ids, true)
-        || !in_array($reviewee_id, $verified_user_ids, true)) {
+    // ─────────────────────────────────────────────
+    // 2-C. reviewer 검증 — QR 인증자여야 후기 작성 가능
+    // ─────────────────────────────────────────────
+    if (!in_array($reviewer_id, $verified_user_ids, true)) {
         sendError('QR 인증을 하지 않아 후기를 작성할 수 없습니다');
     }
 
     // ─────────────────────────────────────────────
+    // 2-D. 리뷰 가능 집합 구성 (reviewee 검증용)
+    //      = 승인된 참여자(meeting_participants) + 호스트
+    //
+    //      QR 인증 여부와 무관하게, 모임에 승인된 사람이라면
+    //      모두 리뷰 대상이 된다. (노쇼/불참자도 포함)
+    // ─────────────────────────────────────────────
+    $participant_query = "SELECT user_id
+                            FROM meeting_participants
+                           WHERE meeting_id = :meeting_id
+                             AND participation_status = '승인'";
+
+    $participant_stmt = $db->prepare($participant_query);
+    $participant_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+    $participant_stmt->execute();
+
+    $reviewable_user_ids = [];
+    while ($row = $participant_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $reviewable_user_ids[] = intval($row['user_id']);
+    }
+
+    // 호스트는 meeting_participants 에 행이 없을 수 있으므로 명시적으로 합집합 처리
+    if (!in_array($host_id, $reviewable_user_ids, true)) {
+        $reviewable_user_ids[] = $host_id;
+    }
+
+    // ─────────────────────────────────────────────
+    // 2-E. reviewee 검증 — 리뷰 가능 집합에 속해야 함
+    // ─────────────────────────────────────────────
+    if (!in_array($reviewee_id, $reviewable_user_ids, true)) {
+        sendError('해당 사용자는 이 모임의 리뷰 대상이 아닙니다');
+    }
+
+    // ─────────────────────────────────────────────
     // 3. 중복 제출 사전 체크
-    //    (트랜잭션 안 UNIQUE 위반으로도 한 번 더 방어하지만,
+    //    (트랜잭션 안 UNIQUE 위반으로도 방어되지만,
     //     여기서 먼저 걸러내면 더 친절한 에러 메시지를 줄 수 있음)
     // ─────────────────────────────────────────────
     $dup_query = "SELECT review_id FROM meeting_reviews
-                   WHERE meeting_id = :meeting_id
+                   WHERE meeting_id  = :meeting_id
                      AND reviewer_id = :reviewer_id
                      AND reviewee_id = :reviewee_id";
 
     $dup_stmt = $db->prepare($dup_query);
-    $dup_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+    $dup_stmt->bindParam(':meeting_id',  $meeting_id,  PDO::PARAM_INT);
     $dup_stmt->bindParam(':reviewer_id', $reviewer_id, PDO::PARAM_INT);
     $dup_stmt->bindParam(':reviewee_id', $reviewee_id, PDO::PARAM_INT);
     $dup_stmt->execute();
@@ -158,11 +203,12 @@ try {
                         (:meeting_id, :reviewer_id, :reviewee_id, :rating, :content, NOW())";
 
     $insert_stmt = $db->prepare($insert_query);
-    $insert_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+    $insert_stmt->bindParam(':meeting_id',  $meeting_id,  PDO::PARAM_INT);
     $insert_stmt->bindParam(':reviewer_id', $reviewer_id, PDO::PARAM_INT);
     $insert_stmt->bindParam(':reviewee_id', $reviewee_id, PDO::PARAM_INT);
-    $insert_stmt->bindParam(':rating', $rating, PDO::PARAM_INT);
-    $insert_stmt->bindParam(':content', $content, $content === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+    $insert_stmt->bindParam(':rating',      $rating,      PDO::PARAM_INT);
+    $insert_stmt->bindParam(':content', $content, $content === null ?
+        PDO::PARAM_NULL : PDO::PARAM_STR);
 
     try {
         $insert_stmt->execute();
@@ -187,15 +233,15 @@ try {
 
     $update_stmt = $db->prepare($update_query);
     // bindValue 사용: bindParam(참조 바인딩)은 execute 시점에 변수를
-    // 문자열로 재해석할 수 있어, 응답에 쓸 $manner_score_added의
+    // 문자열로 재해석할 수 있어, 응답에 쓸 $manner_score_added 의
     // 타입이 의도치 않게 바뀌는 문제가 있음 → 값으로만 전달
-    $update_stmt->bindValue(':score', $manner_score_added);
+    $update_stmt->bindValue(':score',      $manner_score_added);
     $update_stmt->bindValue(':reviewee_id', $reviewee_id, PDO::PARAM_INT);
     $update_stmt->execute();
 
     // 가산 후 점수 재조회 (응답용)
     $score_query = "SELECT user_manner_score FROM users WHERE user_id = :reviewee_id";
-    $score_stmt = $db->prepare($score_query);
+    $score_stmt  = $db->prepare($score_query);
     $score_stmt->bindParam(':reviewee_id', $reviewee_id, PDO::PARAM_INT);
     $score_stmt->execute();
     $reviewee_new_manner_score = (float)$score_stmt->fetchColumn();
@@ -207,21 +253,25 @@ try {
     //    reviewer 닉네임은 알림 문구에만 쓰이므로, 푸시 발송 실패가
     //    후기 등록 자체(이미 commit 완료)에는 영향을 주지 않는다.
     // ─────────────────────────────────────────────
-    $reviewer_nickname_stmt = $db->prepare("SELECT user_nickname FROM users WHERE user_id = :reviewer_id");
+    $reviewer_nickname_stmt = $db->prepare(
+        "SELECT user_nickname FROM users WHERE user_id = :reviewer_id"
+    );
     $reviewer_nickname_stmt->bindParam(':reviewer_id', $reviewer_id, PDO::PARAM_INT);
     $reviewer_nickname_stmt->execute();
     $reviewer_nickname = (string)$reviewer_nickname_stmt->fetchColumn();
 
-    push_to_user($reviewee_id, 'review_received', '새 후기', $reviewer_nickname . '님이 후기를 남겼어요', [
-        'meeting_id' => $meeting_id,
-    ]);
+    push_to_user($reviewee_id, 'review_received', '새 후기',
+        $reviewer_nickname . '님이 후기를 남겼어요', [
+            'meeting_id' => $meeting_id,
+        ]
+    );
 
     sendSuccess('후기가 등록되었습니다', [
-        'review_id'                  => $review_id,
-        'reviewee_id'                => $reviewee_id,
-        'rating'                     => $rating,
-        'manner_score_added'         => (float)$manner_score_added,
-        'reviewee_new_manner_score'  => $reviewee_new_manner_score,
+        'review_id'                 => $review_id,
+        'reviewee_id'               => $reviewee_id,
+        'rating'                    => $rating,
+        'manner_score_added'        => (float)$manner_score_added,
+        'reviewee_new_manner_score' => $reviewee_new_manner_score,
     ]);
 
 } catch (PDOException $error) {

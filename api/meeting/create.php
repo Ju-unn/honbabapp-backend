@@ -3,12 +3,10 @@
  * 모임 / 체험단 생성 API
  * POST /api/meeting/create.php
  *
- * 변경사항 (체험단 도입):
- * - meeting_type 수신 (기본값 '일반')
- * - campaign 4개 컬럼 INSERT
- * - 체험단일 때 campaign_channels, campaign_provided 필수 검증
- * - 인원 상한: 일반 2~10, 체험단 2~20
- * - 호스트 자동참여 / 트랜잭션 기존 그대로
+ * 수정 내역:
+ * - meeting_date 필수 검증 제거 (체험단은 채팅으로 날짜 조율)
+ * - 일반 모임은 meeting_date 여전히 필수
+ * - meeting_date nullable 처리
  */
 
 require_once '../config/database.php';
@@ -21,33 +19,48 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $input = json_decode(file_get_contents('php://input'), true);
 
 // ── 공통 필수 필드 ───────────────────────────────────────────
-if (empty($input['user_id']))              sendError('user_id가 필요합니다');
-if (empty($input['meeting_title']))        sendError('모임 제목이 필요합니다');
-if (empty($input['meeting_category']))     sendError('카테고리가 필요합니다');
-if (empty($input['meeting_date']))         sendError('모임 날짜가 필요합니다');
+if (empty($input['user_id']))                  sendError('user_id가 필요합니다');
+if (empty($input['meeting_title']))            sendError('모임 제목이 필요합니다');
+if (empty($input['meeting_category']))         sendError('카테고리가 필요합니다');
 if (empty($input['meeting_max_participants'])) sendError('최대 참여 인원이 필요합니다');
-if (empty($input['location']))             sendError('위치 정보가 필요합니다');
+if (empty($input['location']))                 sendError('위치 정보가 필요합니다');
 
 $user_id              = intval($input['user_id']);
 $meeting_title        = trim($input['meeting_title']);
 $meeting_description  = isset($input['meeting_description']) ? trim($input['meeting_description']) : '';
 $meeting_category     = trim($input['meeting_category']);
-$meeting_date         = trim($input['meeting_date']);
 $meeting_max_participants = intval($input['meeting_max_participants']);
 $meeting_price_range  = isset($input['meeting_price_range']) ? trim($input['meeting_price_range']) : null;
 $meeting_image        = isset($input['meeting_image']) ? trim($input['meeting_image']) : null;
 $location             = $input['location'];
 
 // ── 체험단 전용 필드 ─────────────────────────────────────────
-$meeting_type            = isset($input['meeting_type']) ? trim($input['meeting_type']) : '일반';
-$campaign_channels       = isset($input['campaign_channels'])    ? trim($input['campaign_channels'])    : null;
-$campaign_provided       = isset($input['campaign_provided'])    ? trim($input['campaign_provided'])    : null;
-$campaign_requirements   = isset($input['campaign_requirements']) ? trim($input['campaign_requirements']) : null;
-$campaign_deadline       = isset($input['campaign_deadline'])    ? trim($input['campaign_deadline'])    : null;
+$meeting_type          = isset($input['meeting_type']) ? trim($input['meeting_type']) : '일반';
+$campaign_channels     = isset($input['campaign_channels'])    ? trim($input['campaign_channels'])    : null;
+$campaign_provided     = isset($input['campaign_provided'])    ? trim($input['campaign_provided'])    : null;
+$campaign_requirements = isset($input['campaign_requirements']) ? trim($input['campaign_requirements']) : null;
+$campaign_deadline     = isset($input['campaign_deadline'])    ? trim($input['campaign_deadline'])    : null;
 
 // ── 타입 유효성 검사 ─────────────────────────────────────────
 if (!in_array($meeting_type, ['일반', '체험단'])) {
     sendError('meeting_type은 일반 또는 체험단이어야 합니다');
+}
+
+// ── meeting_date 처리 ────────────────────────────────────────
+// 일반 모임: meeting_date = 실제 모임 날짜 (필수)
+// 체험단:    meeting_date = campaign_deadline (모집 종료 기준)
+//            deadline 없으면 등록일 기준 30일 후 기본값
+if ($meeting_type === '일반') {
+    if (empty($input['meeting_date'])) sendError('모임 날짜가 필요합니다');
+    $meeting_date = trim($input['meeting_date']);
+} else {
+    // 체험단 — campaign_deadline 을 meeting_date 로 사용
+    if (!empty($campaign_deadline)) {
+        $meeting_date = $campaign_deadline;
+    } else {
+        // deadline 미입력 시 30일 후를 기본값으로 설정
+        $meeting_date = date('Y-m-d H:i:s', strtotime('+30 days'));
+    }
 }
 
 // ── 인원 상한 검사 (일반 2~10 / 체험단 2~20) ────────────────
@@ -58,12 +71,8 @@ if ($meeting_max_participants < 2 || $meeting_max_participants > $max_participan
 
 // ── 체험단 필수 필드 검증 ────────────────────────────────────
 if ($meeting_type === '체험단') {
-    if (empty($campaign_channels)) {
-        sendError('체험단은 홍보 채널을 선택해야 합니다');
-    }
-    if (empty($campaign_provided)) {
-        sendError('체험단은 제공 내역을 입력해야 합니다');
-    }
+    if (empty($campaign_channels)) sendError('체험단은 홍보 채널을 선택해야 합니다');
+    if (empty($campaign_provided)) sendError('체험단은 제공 내역을 입력해야 합니다');
 }
 
 // ── 일반 모임이면 campaign 필드 null 강제 ───────────────────
@@ -86,15 +95,15 @@ try {
     $db->beginTransaction();
 
     // ── 1. locations INSERT ──────────────────────────────────
-    $sigungu     = $location['sigungu']      ?? null;
-    $place_name  = $location['place_name']   ?? null;
-    $address     = $location['address']      ?? null;
+    $sigungu      = $location['sigungu']      ?? null;
+    $place_name   = $location['place_name']   ?? null;
+    $address      = $location['address']      ?? null;
     $road_address = $location['road_address'] ?? null;
-    $sido        = $location['sido']         ?? null;
-    $dong        = $location['dong']         ?? null;
-    $map_x       = $location['map_x']        ?? null;
-    $map_y       = $location['map_y']        ?? null;
-    $category    = $location['category']     ?? null;
+    $sido         = $location['sido']         ?? null;
+    $dong         = $location['dong']         ?? null;
+    $map_x        = $location['map_x']        ?? null;
+    $map_y        = $location['map_y']        ?? null;
+    $category     = $location['category']     ?? null;
     $phone_number = $location['phone_number'] ?? null;
 
     $location_insert_query = "INSERT INTO locations (
@@ -120,7 +129,7 @@ try {
 
     $location_id = $db->lastInsertId();
 
-    // ── 2. meetings INSERT (campaign 컬럼 추가) ──────────────
+    // ── 2. meetings INSERT ───────────────────────────────────
     $meeting_insert_query = "INSERT INTO meetings (
         meeting_type,
         meeting_host_id, meeting_title, meeting_description, meeting_category,
@@ -136,25 +145,25 @@ try {
     )";
 
     $meeting_stmt = $db->prepare($meeting_insert_query);
-    $meeting_stmt->bindParam(':meeting_type',        $meeting_type);
-    $meeting_stmt->bindParam(':host_id',             $user_id);
-    $meeting_stmt->bindParam(':title',               $meeting_title);
-    $meeting_stmt->bindParam(':description',         $meeting_description);
-    $meeting_stmt->bindParam(':category',            $meeting_category);
-    $meeting_stmt->bindParam(':date',                $meeting_date);
-    $meeting_stmt->bindParam(':max_participants',    $meeting_max_participants);
-    $meeting_stmt->bindParam(':price_range',         $meeting_price_range);
-    $meeting_stmt->bindParam(':meeting_image',       $meeting_image);
-    $meeting_stmt->bindParam(':location_id',         $location_id);
-    $meeting_stmt->bindParam(':campaign_channels',   $campaign_channels);
-    $meeting_stmt->bindParam(':campaign_provided',   $campaign_provided);
+    $meeting_stmt->bindParam(':meeting_type',          $meeting_type);
+    $meeting_stmt->bindParam(':host_id',               $user_id);
+    $meeting_stmt->bindParam(':title',                 $meeting_title);
+    $meeting_stmt->bindParam(':description',           $meeting_description);
+    $meeting_stmt->bindParam(':category',              $meeting_category);
+    $meeting_stmt->bindParam(':date',                  $meeting_date);
+    $meeting_stmt->bindParam(':max_participants',      $meeting_max_participants);
+    $meeting_stmt->bindParam(':price_range',           $meeting_price_range);
+    $meeting_stmt->bindParam(':meeting_image',         $meeting_image);
+    $meeting_stmt->bindParam(':location_id',           $location_id);
+    $meeting_stmt->bindParam(':campaign_channels',     $campaign_channels);
+    $meeting_stmt->bindParam(':campaign_provided',     $campaign_provided);
     $meeting_stmt->bindParam(':campaign_requirements', $campaign_requirements);
-    $meeting_stmt->bindParam(':campaign_deadline',   $campaign_deadline);
+    $meeting_stmt->bindParam(':campaign_deadline',     $campaign_deadline);
     $meeting_stmt->execute();
 
     $meeting_id = $db->lastInsertId();
 
-    // ── 3. 호스트 자동참여 (기존 그대로) ────────────────────
+    // ── 3. 호스트 자동참여 ───────────────────────────────────
     $participant_insert_query = "INSERT INTO meeting_participants (
         meeting_id, user_id, participation_status, approved_at, approved_by
     ) VALUES (
@@ -170,8 +179,8 @@ try {
     $db->commit();
 
     sendSuccess('모임이 생성되었습니다', [
-        'meeting_id'  => (int)$meeting_id,
-        'location_id' => (int)$location_id,
+        'meeting_id'   => (int)$meeting_id,
+        'location_id'  => (int)$location_id,
         'meeting_type' => $meeting_type
     ]);
 

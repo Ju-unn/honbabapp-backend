@@ -3,9 +3,6 @@
  * 신청자 목록 조회 API
  * GET /api/meeting/applicants.php?meeting_id=1&host_id=2&status=대기
  *
- * 변경사항 (체험단 도입):
- * - 체험단(meeting_type='체험단')이면 응답에 SNS ID + 자기소개 포함
- * - 일반 모임은 기존 필드만 (SNS ID 비공개 유지)
  */
 
 require_once '../config/database.php';
@@ -41,86 +38,73 @@ try {
     $meeting      = $meeting_stmt->fetch(PDO::FETCH_ASSOC);
     $meeting_type = $meeting['meeting_type'];
 
-    // ── 2. 호스트 권한 확인 (기존 그대로) ───────────────────
+    // ── 2. 호스트 권한 확인 ───────────────────────────────
     if ($meeting['meeting_host_id'] != $host_id) {
         sendError('호스트만 신청자 목록을 조회할 수 있습니다', 403);
     }
 
-    // ── 3. 신청자 목록 조회 (meeting_type에 따라 분기) ───────
+    // ── 3. 신청자 조회 (타입에 따라 필드 분기) ─────────────
     if ($meeting_type === '체험단') {
-        // 체험단: SNS ID + 자기소개 포함 (users JOIN)
-        $query = "SELECT
-                    mp.participant_id,
-                    mp.user_id,
-                    mp.participation_status,
-                    mp.applied_at,
-                    mp.applicant_intro,
-                    u.user_nickname,
-                    u.user_profile_image,
-                    u.user_manner_score,
-                    u.user_gender,
-                    u.user_instagram_id,
-                    u.user_blog_id
-                  FROM meeting_participants mp
-                  JOIN users u ON mp.user_id = u.user_id
-                  WHERE mp.meeting_id = :meeting_id
-                  AND mp.participation_status = :status
-                  ORDER BY mp.applied_at ASC";
+        // 체험단: SNS ID + 자기소개 포함
+        // Issue #6B: AND mp.user_id != :host_id 추가
+        $stmt = $db->prepare("
+            SELECT
+                mp.participant_id,
+                mp.user_id,
+                mp.participation_status,
+                mp.applied_at,
+                mp.approved_at,
+                mp.applicant_intro,
+                u.user_nickname,
+                u.user_profile_image,
+                u.user_manner_score,
+                u.user_instagram_id,
+                u.user_blog_id
+            FROM meeting_participants mp
+            JOIN users u ON mp.user_id = u.user_id
+            WHERE mp.meeting_id    = :meeting_id
+              AND mp.participation_status = :status
+              AND mp.user_id != :host_id
+            ORDER BY mp.applied_at ASC
+        ");
     } else {
-        // 일반 모임: SNS ID 비공개 (기존 그대로)
-        $query = "SELECT
-                    mp.participant_id,
-                    mp.user_id,
-                    mp.participation_status,
-                    mp.applied_at,
-                    u.user_nickname,
-                    u.user_profile_image,
-                    u.user_manner_score,
-                    u.user_gender
-                  FROM meeting_participants mp
-                  JOIN users u ON mp.user_id = u.user_id
-                  WHERE mp.meeting_id = :meeting_id
-                  AND mp.participation_status = :status
-                  ORDER BY mp.applied_at ASC";
+        // 일반 모임: SNS ID 비공개 유지
+        // Issue #6B: AND mp.user_id != :host_id 추가
+        $stmt = $db->prepare("
+            SELECT
+                mp.participant_id,
+                mp.user_id,
+                mp.participation_status,
+                mp.applied_at,
+                mp.approved_at,
+                u.user_nickname,
+                u.user_profile_image,
+                u.user_manner_score
+            FROM meeting_participants mp
+            JOIN users u ON mp.user_id = u.user_id
+            WHERE mp.meeting_id    = :meeting_id
+              AND mp.participation_status = :status
+              AND mp.user_id != :host_id
+            ORDER BY mp.applied_at ASC
+        ");
     }
 
-    $stmt = $db->prepare($query);
     $stmt->bindParam(':meeting_id', $meeting_id);
     $stmt->bindParam(':status',     $status);
+    $stmt->bindParam(':host_id',    $host_id); 
     $stmt->execute();
 
-    $applicants = [];
-
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $applicant = [
-            'participant_id'       => (int)$row['participant_id'],
-            'user_id'              => (int)$row['user_id'],
-            'user_nickname'        => $row['user_nickname'],
-            'user_profile_image'   => $row['user_profile_image'],
-            'user_manner_score'    => (float)$row['user_manner_score'],
-            'user_gender'          => $row['user_gender'],
-            'participation_status' => $row['participation_status'],
-            'applied_at'           => $row['applied_at'],
-        ];
-
-        // 체험단 전용 필드 추가
-        if ($meeting_type === '체험단') {
-            $applicant['user_instagram_id'] = $row['user_instagram_id'] ?? null;
-            $applicant['user_blog_id']      = $row['user_blog_id'] ?? null;
-            $applicant['applicant_intro']   = $row['applicant_intro'] ?? null;
-        }
-
-        $applicants[] = $applicant;
-    }
+    $applicants = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     sendSuccess('신청자 목록 조회 성공', [
         'meeting_id'   => $meeting_id,
         'meeting_type' => $meeting_type,
-        'applicants'   => $applicants,
+        'status'       => $status,
         'total_count'  => count($applicants),
+        'applicants'   => $applicants,
     ]);
 
 } catch (PDOException $e) {
-    sendError('신청자 목록 조회 실패: ' . $e->getMessage(), 500);
+    sendError('DB 오류: ' . $e->getMessage(), 500);
 }
 ?>

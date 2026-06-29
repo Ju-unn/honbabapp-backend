@@ -379,21 +379,21 @@ try {
 // ═══════════════════════════════════════════════════════
 
 /**
- * D-day 기반 패널티 계산
- *   - D-1 이내 (< 24h)  : 1.0
- *   - D-2     (< 48h)  : 0.3
- *   - D-3 이전 (≥ 48h)  : 0.0
  *
  * @param string $meeting_date 'YYYY-MM-DD HH:MM:SS'
  * @return float
  */
 function calculate_penalty($meeting_date) {
     $diff_seconds = strtotime($meeting_date) - time();
-    $diff_hours   = $diff_seconds / 3600;
-
-    if ($diff_hours < 24)  return 1.0;
-    if ($diff_hours < 48)  return 0.3;
-    return 0.0;
+ 
+    // Issue #7: 이미 종료된 모임 → 패널티 없음
+    if ($diff_seconds <= 0) return 0.0;
+ 
+    $diff_hours = $diff_seconds / 3600;
+ 
+    if ($diff_hours < 24) return 1.0;  // D-1 이내
+    if ($diff_hours < 48) return 0.3;  // D-2
+    return 0.0;                         // D-3 이전
 }
 
 

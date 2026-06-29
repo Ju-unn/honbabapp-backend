@@ -1,56 +1,71 @@
 <?php
+/**
+ * 프로필 수정 API
+ * POST /api/user/update_profile.php
+ *
+ * 변경사항:
+ * - user_instagram_id, user_blog_id 중복 검사 추가
+ *   (null이면 삭제 의도 → 중복 검사 스킵)
+ */
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('POST 요청만 허용됩니다' , 405);
+    sendError('POST 요청만 허용됩니다', 405);
 }
 
-
-
-// Android에서 JSON Body로 보내므로 php://input으로 읽음
-// file_get_contents('php://input') = HTTP 요청 본문(body) 전체를 문자열로 읽기
-// json_decode(..., true) = JSON 문자열 → PHP 배열로 변환 (두번째 인자 true = 배열, false = 객체)
-
-$input = json_decode(file_get_contents('php://input') , true);
+$input = json_decode(file_get_contents('php://input'), true);
 
 if (empty($input['user_id'])) {
     sendError('유저 아이디가 필요합니다.');
 }
+
 $user_id = intval($input['user_id']);
 
-
-// 선택적 필드들: 요청에 포함된 것만 업데이트할 것임
-// isset() = 키 자체가 존재하는지 확인 (empty는 빈 문자열도 false로 처리해서 부적합)
-$user_nickname = isset($input['user_nickname']) ? trim($input['user_nickname']) : null;
+// ── 기존 선택적 필드 ─────────────────────────────────────────
+$user_nickname       = isset($input['user_nickname'])       ? trim($input['user_nickname'])       : null;
 $user_status_message = isset($input['user_status_message']) ? trim($input['user_status_message']) : null;
-$user_profile_image = isset($input['user_profile_image']) ? trim($input['user_profile_image']) : null;
+$user_profile_image  = isset($input['user_profile_image'])  ? trim($input['user_profile_image'])  : null;
 
-// 닉네임이 요청에 포함된 경우
+// ── SNS ID 신규 필드 ─────────────────────────────────────────
+$user_instagram_id = isset($input['user_instagram_id']) ? trim($input['user_instagram_id']) : null;
+$user_blog_id      = isset($input['user_blog_id'])      ? trim($input['user_blog_id'])      : null;
+
+// 빈 문자열은 null로 변환 (삭제 의도)
+if ($user_instagram_id === '') $user_instagram_id = null;
+if ($user_blog_id === '')      $user_blog_id = null;
+
+// 닉네임 길이 검증
 if ($user_nickname !== null) {
     if (mb_strlen($user_nickname) < 2 || mb_strlen($user_nickname) > 10) {
         sendError('닉네임은 2~10자 이내로 입력해주세요');
     }
 }
 
+// SNS ID 길이 검증
+if ($user_instagram_id !== null && mb_strlen($user_instagram_id) > 50) {
+    sendError('인스타그램 ID는 50자 이하로 입력해주세요');
+}
+if ($user_blog_id !== null && mb_strlen($user_blog_id) > 50) {
+    sendError('블로그 ID는 50자 이하로 입력해주세요');
+}
+
 $database = new Database();
 $db = $database->getConnection();
 
 if ($db === null) {
-    sendError('데이터 베이스 연결에 실패 했습니다.' , 500);
+    sendError('데이터베이스 연결에 실패했습니다.', 500);
 }
 
 try {
     // 닉네임 중복 검사
     if ($user_nickname !== null) {
-        $check_query = 'SELECT user_id FROM users
-                        WHERE user_nickname = :nickname
-                        AND user_id != :user_id'; // 자기 자신은 제외
-
-        $check_stmt = $db->prepare($check_query);
-        $check_stmt->bindParam(':nickname' , $user_nickname);
-        $check_stmt->bindParam(':user_id' , $user_id , PDO::PARAM_INT);
+        $check_stmt = $db->prepare(
+            'SELECT user_id FROM users WHERE user_nickname = :nickname AND user_id != :user_id'
+        );
+        $check_stmt->bindParam(':nickname', $user_nickname);
+        $check_stmt->bindParam(':user_id',  $user_id, PDO::PARAM_INT);
         $check_stmt->execute();
 
         if ($check_stmt->rowCount() > 0) {
@@ -58,53 +73,77 @@ try {
         }
     }
 
+    // ── SNS ID 중복 검사 (null이면 삭제 의도 → 스킵) ─────────
 
-    // 동적 UPDATE 쿼리
-    // 요청에 포함된 필드만 업데이트하는
-    // 닉네임만 바꾸고 싶으면 닉네임만 body에 담으면 됨
+    if ($user_instagram_id !== null) {
+        $insta_check = $db->prepare(
+            'SELECT user_id FROM users WHERE user_instagram_id = :instagram_id AND user_id != :user_id'
+        );
+        $insta_check->bindParam(':instagram_id', $user_instagram_id);
+        $insta_check->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+        $insta_check->execute();
 
-    $setParts = []; //"user_nickname = :nickname" 같은 SET 절 조각들
-    $params = []; // bindParam에 쓸 파라미터들
-
-    if($user_nickname !== null) {
-        $setParts[] = "user_nickname = :nickname";
-        $params[':nickname'] = $user_nickname; 
+        if ($insta_check->rowCount() > 0) {
+            sendError('이미 다른 계정에서 사용 중인 인스타그램 ID입니다.');
+        }
     }
 
-    if($user_status_message !== null) {
-        $setParts[] = "user_status_message = :status_message";
+    if ($user_blog_id !== null) {
+        $blog_check = $db->prepare(
+            'SELECT user_id FROM users WHERE user_blog_id = :blog_id AND user_id != :user_id'
+        );
+        $blog_check->bindParam(':blog_id', $user_blog_id);
+        $blog_check->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+        $blog_check->execute();
+
+        if ($blog_check->rowCount() > 0) {
+            sendError('이미 다른 계정에서 사용 중인 블로그 ID입니다.');
+        }
+    }
+
+    // ── 동적 UPDATE ───────────────────────────────────────────
+    $set_parts = [];
+    $params    = [];
+
+    if ($user_nickname !== null) {
+        $set_parts[] = "user_nickname = :nickname";
+        $params[':nickname'] = $user_nickname;
+    }
+    if ($user_status_message !== null) {
+        $set_parts[] = "user_status_message = :status_message";
         $params[':status_message'] = $user_status_message;
     }
-
-    if($user_profile_image != null) {
-        $setParts[] ="user_profile_image = :profileImage";
-        $params[':profileImage'] = $user_profile_image;
+    if ($user_profile_image !== null) {
+        $set_parts[] = "user_profile_image = :profile_image";
+        $params[':profile_image'] = $user_profile_image;
+    }
+    // SNS ID (null 포함 — 빈 값으로 초기화 가능)
+    if (array_key_exists('user_instagram_id', $input)) {
+        $set_parts[] = "user_instagram_id = :instagram_id";
+        $params[':instagram_id'] = $user_instagram_id;
+    }
+    if (array_key_exists('user_blog_id', $input)) {
+        $set_parts[] = "user_blog_id = :blog_id";
+        $params[':blog_id'] = $user_blog_id;
     }
 
-    // 바꿀 필드가 하나도 없다면 에러
-    if (empty($setParts)) {
-        sendError('수정할 할목이 없습니다');
+    if (empty($set_parts)) {
+        sendError('수정할 항목이 없습니다');
     }
 
-    // implode() 배열을 특정 구분자로 이어붙임
-    // ["a = :a , "b = :b"] - > "a = :a" , "b = :b"
-    $setClause = implode(', ' , $setParts);
-    $query = "UPDATE users SET $setClause WHERE user_id = :user_id";
-    
+    $set_clause = implode(', ', $set_parts);
+    $query      = "UPDATE users SET {$set_clause} WHERE user_id = :user_id";
+
     $stmt = $db->prepare($query);
-
-    // 동적으로 모은 피라미터를 바인딩
     foreach ($params as $key => $value) {
-        $stmt->bindValue($key , $value);
+        $stmt->bindValue($key, $value);
     }
-    $stmt->bindValue(':user_id' , $user_id , PDO::PARAM_INT);
+    $stmt->bindValue(':user_id', $user_id, PDO::PARAM_INT);
     $stmt->execute();
 
     sendSuccess('프로필이 수정되었습니다.');
 
 } catch (PDOException $e) {
-    sendError('데이터 베이스 오류 ' . $e->getMessage() , 500);
+    sendError('데이터베이스 오류: ' . $e->getMessage(), 500);
 }
-
-
 ?>

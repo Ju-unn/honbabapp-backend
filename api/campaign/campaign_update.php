@@ -34,6 +34,7 @@
  *   "campaign_requirements": "방문 후 2주 이내 업로드",
  *   "campaign_deadline": "2025-12-01 00:00:00"
  * }
+ *
  */
 
 require_once '../config/database.php';
@@ -80,18 +81,6 @@ $host_id                  = intval($input['user_id']);
 $meeting_title            = trim($input['meeting_title']);
 $meeting_description      = trim($input['meeting_description']);
 $meeting_category         = trim($input['meeting_category']);
-// 체험단 수정 — meeting_date = campaign_deadline (모집 종료 기준)
-// deadline 없으면 등록일 기준 30일 후 기본값
-if (!empty($campaign_deadline)) {
-    $meeting_date = $campaign_deadline;
-} else {
-    $meeting_date = date('Y-m-d H:i:s', strtotime('+30 days'));
-}
-$meeting_max_participants = intval($input['meeting_max_participants']);
-$meeting_price_range      = trim($input['meeting_price_range']);
-$meeting_image            = isset($input['meeting_image']) && !empty(trim($input['meeting_image']))
-    ? trim($input['meeting_image'])
-    : null;
 
 // campaign 전용 필드
 $campaign_channels     = trim($input['campaign_channels']);
@@ -101,6 +90,20 @@ $campaign_requirements = isset($input['campaign_requirements']) && !empty(trim($
     : null;
 $campaign_deadline     = isset($input['campaign_deadline']) && !empty(trim($input['campaign_deadline']))
     ? trim($input['campaign_deadline'])
+    : null;
+
+// 체험단 수정 — meeting_date = campaign_deadline (모집 종료 기준)
+// deadline 없으면 등록일 기준 30일 후 기본값
+if (!empty($campaign_deadline)) {
+    $meeting_date = $campaign_deadline;
+} else {
+    $meeting_date = date('Y-m-d H:i:s', strtotime('+30 days'));
+}
+
+$meeting_max_participants = intval($input['meeting_max_participants']);
+$meeting_price_range      = trim($input['meeting_price_range']);
+$meeting_image            = isset($input['meeting_image']) && !empty(trim($input['meeting_image']))
+    ? trim($input['meeting_image'])
     : null;
 
 // ── 유효성 검증 ──────────────────────────────────────────────
@@ -155,9 +158,16 @@ try {
 
     $db->beginTransaction();
 
+    // ── 요청으로 들어온 sido 값 (NULL/빈 문자열일 수 있음) ──────
+    $incoming_sido = isset($location['sido']) ? trim($location['sido']) : null;
+    if ($incoming_sido === '') {
+        $incoming_sido = null;
+    }
+
     // ── 2. location: place_name + sigungu 로 기존 행 재사용 또는 신규 INSERT ──
+    //    (조회 조건은 그대로 두어, 같은 가게가 sido 유무로 중복 생성되지 않게 한다)
     $location_check_stmt = $db->prepare("
-        SELECT location_id FROM locations
+        SELECT location_id, sido FROM locations
         WHERE place_name = :place_name
           AND sigungu    = :sigungu
         LIMIT 1
@@ -167,11 +177,28 @@ try {
     $location_check_stmt->execute();
 
     if ($location_check_stmt->rowCount() > 0) {
-        $location_id = $location_check_stmt->fetch(PDO::FETCH_ASSOC)['location_id'];
+        $existing_location = $location_check_stmt->fetch(PDO::FETCH_ASSOC);
+        $location_id = $existing_location['location_id'];
+
+        // ── sido 점진적 backfill ──────────────────────────────
+        // 기존 행의 sido가 비어있고(NULL/빈 문자열), 이번 요청에
+        // 새로운 sido 값이 들어왔다면 보정한다. 이미 sido가 채워진
+        // 행은 덮어쓰지 않는다(기존 정상 데이터 보호).
+        $existing_sido = $existing_location['sido'];
+        $existing_sido_is_empty = ($existing_sido === null || trim((string)$existing_sido) === '');
+
+        if ($existing_sido_is_empty && $incoming_sido !== null) {
+            $backfill_stmt = $db->prepare(
+                "UPDATE locations SET sido = :sido WHERE location_id = :location_id"
+            );
+            $backfill_stmt->bindParam(':sido', $incoming_sido);
+            $backfill_stmt->bindParam(':location_id', $location_id, PDO::PARAM_INT);
+            $backfill_stmt->execute();
+        }
     } else {
         $address      = $location['address']      ?? null;
         $road_address = $location['road_address']  ?? null;
-        $sido         = $location['sido']          ?? null;
+        $sido         = $incoming_sido;
         $dong         = $location['dong']          ?? null;
         $map_x        = $location['map_x']         ?? null;
         $map_y        = $location['map_y']         ?? null;

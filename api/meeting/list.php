@@ -3,11 +3,6 @@
  * 모임 목록 조회 API
  * GET /api/meeting/list.php
  *
- * 변경사항 (체험단 도입):
- * - meeting_type 파라미터 추가 (미지정 시 기본값 '일반' → 홈/지도 회귀 0)
- * - campaign 전용 필터: channels (체험단 홍보채널 LIKE)
- * - SELECT에 campaign 4개 컬럼 포함
- * - 기존 sigungu / categories / price / 정렬 / 위치필터 그대로 유지
  */
 
 require_once '../config/database.php';
@@ -36,29 +31,57 @@ $radius          = isset($_GET['radius']) ? floatval($_GET['radius']) : 5.0;
 $order_by        = isset($_GET['order_by']) ? trim($_GET['order_by']) : null;
 
 // ── 체험단 신규 파라미터 ─────────────────────────────────────
-// meeting_type 미지정 시 기본값 '일반' → 홈/지도 기존 동작 유지
+// meeting_type 미지정 시 기본값 '일반' → 홈 기존 동작 유지(회귀 0)
+// MapFragment는 일반+체험단을 한 번에 보여줘야 하므로 meeting_type=전체를
+// 명시적으로 보낼 수 있다 → 이 경우 meeting_type WHERE 조건 자체를 생략
 $meeting_type = isset($_GET['meeting_type']) ? trim($_GET['meeting_type']) : '일반';
-// 체험단 채널 필터 (체험단 탭 전용, 선택)
+// 체험단 채널 필터 (체험단 탭 + 지도 공용, 선택)
 $channels_filter = isset($_GET['channels']) ? trim($_GET['channels']) : null;
 
-// meeting_type 유효성
-if (!in_array($meeting_type, ['일반', '체험단'])) {
-    sendError('meeting_type은 일반 또는 체험단이어야 합니다');
+// ── 지역 필터 신규 파라미터 (시/도 → 구 2단계) ───────────────
+$sido = isset($_GET['sido']) ? trim($_GET['sido']) : null;
+
+// ── 지도 날짜/시간 필터 신규 파라미터 ────────────────────────
+// date: YYYY-MM-DD, time: HH:MM (둘 다 선택)
+$date_filter = isset($_GET['date']) ? trim($_GET['date']) : null;
+$time_filter = isset($_GET['time']) ? trim($_GET['time']) : null;
+
+// date 형식 검증 (YYYY-MM-DD)
+if ($date_filter !== null && $date_filter !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_filter)) {
+    sendError('date 파라미터 형식이 올바르지 않습니다 (YYYY-MM-DD)');
+}
+
+// time 형식 검증 (HH:MM)
+if ($time_filter !== null && $time_filter !== '' && !preg_match('/^\d{2}:\d{2}$/', $time_filter)) {
+    sendError('time 파라미터 형식이 올바르지 않습니다 (HH:MM)');
+}
+
+// meeting_type 유효성 ('전체'는 일반+체험단 모두 조회 — MapFragment 전용)
+if (!in_array($meeting_type, ['일반', '체험단', '전체'])) {
+    sendError('meeting_type은 일반, 체험단, 전체 중 하나여야 합니다');
 }
 
 // ── WHERE 조건 조립 ──────────────────────────────────────────
 $where_conditions = [];
 $params = [];
 
-// meeting_type 필터 (항상 포함)
-$where_conditions[] = "m.meeting_type = :meeting_type";
-$params[':meeting_type'] = $meeting_type;
+// meeting_type 필터 ('전체'면 일반+체험단 모두 포함하도록 조건 생략)
+if ($meeting_type !== '전체') {
+    $where_conditions[] = "m.meeting_type = :meeting_type";
+    $params[':meeting_type'] = $meeting_type;
+}
 
 // 모임 상태
 $where_conditions[] = "m.meeting_status = :status";
 $params[':status'] = $status;
 
-// 지역
+// 시/도 (sido)
+if ($sido !== null && $sido !== '') {
+    $where_conditions[] = "l.sido = :sido";
+    $params[':sido'] = $sido;
+}
+
+// 지역 (구)
 if ($sigungu !== null && $sigungu !== '') {
     $where_conditions[] = "l.sigungu = :sigungu";
     $params[':sigungu'] = $sigungu;
@@ -89,10 +112,27 @@ if ($categories && count($categories) > 0) {
     }
 }
 
-// 체험단 채널 필터 (체험단 탭 전용)
-if ($meeting_type === '체험단' && $channels_filter !== null && $channels_filter !== '') {
+// 체험단 채널 필터
+// 채널 필터가 걸리면 meeting_type 값과 무관하게 항상
+// "campaign_channels LIKE '%값%'" 조건만 적용한다.
+// campaign_channels는 일반 모임에서 항상 NULL이므로, 이 조건이 걸리는
+// 순간 일반 모임은 자동으로 결과에서 제외된다(의도된 동작 — 사용자가
+// 특정 홍보 채널을 선택했다면 그 채널을 쓰는 체험단만 보고 싶은 것).
+if ($channels_filter !== null && $channels_filter !== '') {
     $where_conditions[] = "m.campaign_channels LIKE :channels_filter";
     $params[':channels_filter'] = '%' . $channels_filter . '%';
+}
+
+// 날짜 필터 (meeting_date의 날짜 부분만 비교)
+if ($date_filter !== null && $date_filter !== '') {
+    $where_conditions[] = "DATE(m.meeting_date) = :date_filter";
+    $params[':date_filter'] = $date_filter;
+}
+
+// 시간 필터 (해당 날짜 내 시작 시각 이상 — 단순화된 시작시각 필터)
+if ($time_filter !== null && $time_filter !== '') {
+    $where_conditions[] = "TIME(m.meeting_date) >= :time_filter";
+    $params[':time_filter'] = $time_filter . ':00';
 }
 
 // 위치 필터 (기존 Haversine 그대로)
@@ -184,7 +224,7 @@ try {
     $total_count = $count_stmt->fetch(PDO::FETCH_ASSOC)['total'];
     $total_pages = ceil($total_count / $limit);
 
-    // ── 메인 SELECT (campaign 컬럼 추가) ────────────────────
+    // ── 메인 SELECT (campaign 컬럼 + sido 추가) ────────────────
     $query = "SELECT
                 m.meeting_id,
                 m.meeting_type,
@@ -206,6 +246,7 @@ try {
                 m.campaign_deadline,
                 l.location_id,
                 l.place_name,
+                l.sido,
                 l.sigungu,
                 l.dong,
                 l.address,
@@ -275,6 +316,7 @@ try {
             'location' => [
                 'location_id'  => (int)$row['location_id'],
                 'place_name'   => $row['place_name'],
+                'sido'         => $row['sido'],
                 'sigungu'      => $row['sigungu'],
                 'dong'         => $row['dong'],
                 'address'      => $row['address'],

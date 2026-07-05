@@ -6,6 +6,10 @@
  * 기존 api/meeting/update.php 구조 기반에서
  * campaign 4개 필드(channels, provided, requirements, deadline) 추가
  *
+ * 수정 내역:
+ * - 체험단 모집 마감일(campaign_deadline)을 원본 등록일
+ *   (meeting_created_at) 기준 최대 14일로 제한
+ *
  * 요청:
  * {
  *   "meeting_id": 1,
@@ -13,7 +17,6 @@
  *   "meeting_title": "수정된 체험단 제목",
  *   "meeting_description": "수정된 설명",
  *   "meeting_category": "한식",
- *   "meeting_date": "2025-12-22 19:00:00",
  *   "meeting_max_participants": 5,
  *   "meeting_price_range": "20,000원 ~ 40,000원",
  *   "meeting_image": "https://...",
@@ -92,14 +95,6 @@ $campaign_deadline     = isset($input['campaign_deadline']) && !empty(trim($inpu
     ? trim($input['campaign_deadline'])
     : null;
 
-// 체험단 수정 — meeting_date = campaign_deadline (모집 종료 기준)
-// deadline 없으면 등록일 기준 30일 후 기본값
-if (!empty($campaign_deadline)) {
-    $meeting_date = $campaign_deadline;
-} else {
-    $meeting_date = date('Y-m-d H:i:s', strtotime('+30 days'));
-}
-
 $meeting_max_participants = intval($input['meeting_max_participants']);
 $meeting_price_range      = trim($input['meeting_price_range']);
 $meeting_image            = isset($input['meeting_image']) && !empty(trim($input['meeting_image']))
@@ -130,8 +125,9 @@ if ($db === null) {
 
 try {
     // ── 1. 모임 조회 + 호스트 권한 확인 + 체험단 여부 확인 ────
+    //     (14일 제한의 기준점인 meeting_created_at도 함께 조회)
     $stmt_check = $db->prepare("
-        SELECT meeting_current_participants, meeting_type
+        SELECT meeting_current_participants, meeting_type, meeting_created_at
         FROM meetings
         WHERE meeting_id    = :meeting_id
           AND meeting_host_id = :host_id
@@ -154,6 +150,30 @@ try {
     // 최대 인원이 현재 참여자 수보다 작으면 안 됨
     if ($meeting_max_participants < $meeting_row['meeting_current_participants']) {
         sendError('최대 참여 인원은 현재 참여자 수(' . $meeting_row['meeting_current_participants'] . '명)보다 작을 수 없습니다');
+    }
+
+    // meeting_created_at은 DB가 NOW()로 직접 생성하는, 클라이언트가 조작할 수 없는
+    // 신뢰 가능한 값이어야 한다. 파싱에 실패한다는 것은 데이터 정합성 문제이지,
+    // "오늘 기준으로 새로 14일을 열어줘도 되는" 상황이 아니다.
+    // 실패 시 요청을 거부한다(fail-closed) — "오늘 기준 폴백"은 14일 제한 자체를
+    // 무력화하는 구멍이 되므로 절대 사용하지 않는다.
+    $original_registration_timestamp = strtotime($meeting_row['meeting_created_at']);
+    if ($original_registration_timestamp === false) {
+        sendError('모임 등록일 정보를 확인할 수 없어 마감일을 처리할 수 없습니다. 관리자에게 문의해주세요', 500);
+    }
+    $campaign_deadline_maximum_timestamp = $original_registration_timestamp + (14 * 24 * 60 * 60);
+
+    if (!empty($campaign_deadline)) {
+        $campaign_deadline_timestamp = strtotime($campaign_deadline);
+        if ($campaign_deadline_timestamp === false) {
+            sendError('모집 마감일 형식이 올바르지 않습니다');
+        }
+        if ($campaign_deadline_timestamp > $campaign_deadline_maximum_timestamp) {
+            sendError('모집 마감일은 등록일로부터 최대 14일 이내로 설정해주세요');
+        }
+        $meeting_date = $campaign_deadline;
+    } else {
+        $meeting_date = date('Y-m-d H:i:s', $campaign_deadline_maximum_timestamp);
     }
 
     $db->beginTransaction();

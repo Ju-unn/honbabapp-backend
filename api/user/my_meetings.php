@@ -24,14 +24,13 @@ try {
     $meetings = [];
 
     // 1. 내가 호스트인 모임
-    // meeting_image 컬럼이 있으면 가져오고, 없으면 NULL
-    // NOW() 기준으로 is_past 계산: 과거 모임이면 1, 아니면 0
-
+    // meeting_type 컬럼 추가
     $host_query = "SELECT 
                     m.meeting_id,
                     m.meeting_title,
                     m.meeting_date,
                     m.meeting_category,
+                    m.meeting_type,
                     m.meeting_image,
                     m.meeting_status,
                     m.meeting_current_participants,
@@ -47,19 +46,17 @@ try {
     $host_stmt->execute();
     
     while ($row = $host_stmt->fetch(PDO::FETCH_ASSOC)) {
-    $meetings[] = formatMeetingRow($row);
+        $meetings[] = formatMeetingRow($row);
     }
 
     // 내가 참여자인 모임들
-    // JOIN: meeting_participants와 meetings를 meeting_id로 연결
-    // WHERE mp.user_id = :user_id → 내가 참여한 것만
-    // AND mp.participation_status = '승인' → 승인된 것만 (대기/거절 제외)
-    // AND m.meeting_host_id != :user_id → 내가 호스트인 건 이미 위에서 처리했으니 중복
+    // meeting_type 컬럼 추가 (이슈 #3)
     $participant_query = "SELECT 
                             m.meeting_id,
                             m.meeting_title,
                             m.meeting_date,
                             m.meeting_category,
+                            m.meeting_type,
                             m.meeting_image,
                             m.meeting_status,
                             m.meeting_current_participants,
@@ -82,9 +79,7 @@ try {
     }
 
     // 날짜 기준 최신순 정렬 (host 모임 + participant 모임 합친 후)
-    // usort(): 사용자 정의 정렬 함수. a, b 비교해서 음수/0/양수 반환
     usort($meetings, function($a, $b) {
-        // strtotime(): 날짜 문자열 → Unix 타임스탬프(숫자)로 변환 → 숫자 비교 가능
         return strtotime($b['meeting_date']) - strtotime($a['meeting_date']); // 최신이 앞
     });
 
@@ -99,6 +94,7 @@ function formatMeetingRow($row) {
         'meeting_title'                => $row['meeting_title'],
         'meeting_date'                 => $row['meeting_date'],
         'meeting_category'             => $row['meeting_category'],
+        'meeting_type'                 => $row['meeting_type'],   // "일반" 또는 "체험단" (이슈 #3 추가)
         'meeting_image'                => $row['meeting_image'],   // S3 URL or null
         'meeting_status'               => $row['meeting_status'],
         'user_role'                    => $row['user_role'],       // "host" or "participant"
@@ -107,8 +103,4 @@ function formatMeetingRow($row) {
         'is_past'                      => (bool)$row['is_past'],  // Android에서 탭 분류에 사용
     ];
 }
-
-
-
-
 ?>

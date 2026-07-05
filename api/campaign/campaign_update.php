@@ -77,6 +77,9 @@ if (empty($input['campaign_channels'])) {
 if (empty($input['campaign_provided'])) {
     sendError('campaign_provided 필드는 필수입니다');
 }
+if (empty($input['campaign_deadline'])) {
+    sendError('campaign_deadline 필드는 필수입니다');
+}
 
 // ── 입력값 정리 ──────────────────────────────────────────────
 $meeting_id               = intval($input['meeting_id']);
@@ -91,9 +94,7 @@ $campaign_provided     = trim($input['campaign_provided']);
 $campaign_requirements = isset($input['campaign_requirements']) && !empty(trim($input['campaign_requirements']))
     ? trim($input['campaign_requirements'])
     : null;
-$campaign_deadline     = isset($input['campaign_deadline']) && !empty(trim($input['campaign_deadline']))
-    ? trim($input['campaign_deadline'])
-    : null;
+$campaign_deadline = trim($input['campaign_deadline']);
 
 $meeting_max_participants = intval($input['meeting_max_participants']);
 $meeting_price_range      = trim($input['meeting_price_range']);
@@ -163,18 +164,14 @@ try {
     }
     $campaign_deadline_maximum_timestamp = $original_registration_timestamp + (14 * 24 * 60 * 60);
 
-    if (!empty($campaign_deadline)) {
-        $campaign_deadline_timestamp = strtotime($campaign_deadline);
-        if ($campaign_deadline_timestamp === false) {
-            sendError('모집 마감일 형식이 올바르지 않습니다');
-        }
-        if ($campaign_deadline_timestamp > $campaign_deadline_maximum_timestamp) {
-            sendError('모집 마감일은 등록일로부터 최대 14일 이내로 설정해주세요');
-        }
-        $meeting_date = $campaign_deadline;
-    } else {
-        $meeting_date = date('Y-m-d H:i:s', $campaign_deadline_maximum_timestamp);
+    $campaign_deadline_timestamp = strtotime($campaign_deadline);
+    if ($campaign_deadline_timestamp === false) {
+        sendError('모집 마감일 형식이 올바르지 않습니다');
     }
+    if ($campaign_deadline_timestamp > $campaign_deadline_maximum_timestamp) {
+        sendError('모집 마감일은 등록일로부터 최대 14일 이내로 설정해주세요');
+    }
+    $meeting_date = $campaign_deadline;
 
     $db->beginTransaction();
 

@@ -39,26 +39,31 @@
  * 점수 환산: rating(1~5) * 0.2  →  0.2 / 0.4 / 0.6 / 0.8 / 1.0
  */
 
-require_once '../config/database.php';
-require_once '../utils/response.php';
-require_once '../utils/push_emit.php';
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('POST 요청만 허용됩니다', 405);
-}
-
-$input = json_decode(file_get_contents('php://input'), true);
-if (!$input) {
-    sendError('잘못된 요청 데이터');
-}
-
-// ─────────────────────────────────────────────
-// 1. 파라미터 형식 검증
-// ─────────────────────────────────────────────
-$meeting_id  = isset($input['meeting_id'])  ? intval($input['meeting_id'])  : 0;
-$reviewer_id = isset($input['reviewer_id']) ? intval($input['reviewer_id']) : 0;
-$reviewee_id = isset($input['reviewee_id']) ? intval($input['reviewee_id']) : 0;
-$rating      = isset($input['rating'])      ? intval($input['rating'])      : 0;
+ <?php
+ require_once '../config/database.php';
+ require_once '../utils/response.php';
+ require_once '../utils/push_emit.php';
+ require_once '../utils/jwt.php';
+ 
+ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+     sendError('POST 요청만 허용됩니다', 405);
+ }
+ 
+ // 본인 확인 (body의 reviewer_id를 신뢰하지 않음 — 위조 방지)
+ // 매너점수를 올리고 내리는 행위라 위조 방지가 특히 중요함
+ $reviewer_id = get_user_id_from_token();
+ 
+ $input = json_decode(file_get_contents('php://input'), true);
+ if (!$input) {
+     sendError('잘못된 요청 데이터');
+ }
+ 
+ // ─────────────────────────────────────────────
+ // 1. 파라미터 형식 검증
+ // ─────────────────────────────────────────────
+ $meeting_id  = isset($input['meeting_id'])  ? intval($input['meeting_id'])  : 0;
+ $reviewee_id = isset($input['reviewee_id']) ? intval($input['reviewee_id']) : 0;
+ $rating      = isset($input['rating'])      ? intval($input['rating'])      : 0;
 
 // content: trim 후 빈 문자열이면 NULL, 500자 초과면 에러
 $content = isset($input['content']) ? trim((string)$input['content']) : '';

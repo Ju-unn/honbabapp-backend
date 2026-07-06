@@ -34,23 +34,22 @@
  * 추후 chat/upload_chat_image.php 가 추가되면 자연스럽게 데이터가 채워짐.
  */
 
-require_once '../config/database.php';
-require_once '../utils/response.php';
-
-// ───────────────────────────────────────────
-// 1) 요청 검증
-// ───────────────────────────────────────────
-if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-    sendError('GET 요청만 허용됩니다', 405);
-}
-
-$room_id = isset($_GET['room_id']) ? intval($_GET['room_id']) : 0;
-$user_id = isset($_GET['user_id']) ? intval($_GET['user_id']) : 0;
-$page    = isset($_GET['page'])    ? intval($_GET['page'])    : 1;
-$limit   = isset($_GET['limit'])   ? intval($_GET['limit'])   : 30;
-
-if ($room_id <= 0) sendError('room_id가 필요합니다');
-if ($user_id <= 0) sendError('user_id가 필요합니다');
+ require_once '../config/database.php';
+ require_once '../utils/response.php';
+ require_once '../utils/jwt.php';
+ 
+ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+     sendError('GET 요청만 허용됩니다', 405);
+ }
+ 
+ // 본인 확인 (쿼리스트링의 user_id를 신뢰하지 않음 — 위조 방지)
+ $user_id = get_user_id_from_token();
+ 
+ $room_id = isset($_GET['room_id']) ? intval($_GET['room_id']) : 0;
+ $page    = isset($_GET['page'])    ? intval($_GET['page'])    : 1;
+ $limit   = isset($_GET['limit'])   ? intval($_GET['limit'])   : 30;
+ 
+ if ($room_id <= 0) sendError('room_id가 필요합니다');
 
 // 안전 가드 (악의적 큰 값 방지)
 if ($page < 1) $page = 1;

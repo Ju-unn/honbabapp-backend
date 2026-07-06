@@ -2,10 +2,14 @@
 require_once '../config/database.php';
 require_once '../utils/response.php';
 require_once '../utils/socket_emit.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
 }
+
+// 본인 확인 (body의 owner_id를 신뢰하지 않음 — 위조 방지)
+$owner_id = get_user_id_from_token();
 
 $data = json_decode(file_get_contents('php://input'), true);
 if (!$data) {
@@ -13,16 +17,12 @@ if (!$data) {
 }
 
 $room_type  = isset($data['room_type'])  ? $data['room_type']        : '';
-$owner_id   = isset($data['owner_id'])   ? intval($data['owner_id']) : 0;
 $member_ids = isset($data['member_ids']) ? $data['member_ids']       : [];
 $meeting_id = isset($data['meeting_id']) ? intval($data['meeting_id']) : null;
 $room_name  = isset($data['room_name'])  ? trim($data['room_name'])  : '';
 
 if (!in_array($room_type, ['direct', 'group'])) {
     sendError('room_type은 direct 또는 group이어야 합니다');
-}
-if ($owner_id <= 0) {
-    sendError('owner_id가 필요합니다');
 }
 if (empty($member_ids)) {
     sendError('member_ids가 필요합니다');

@@ -1,21 +1,21 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
 }
 
+// 본인 확인 (body의 user_id를 신뢰하지 않음 — 위조 방지)
+$user_id = get_user_id_from_token();
+
 $input = json_decode(file_get_contents('php://input'), true);
 
-if (empty($input['user_id'])) {
-    sendError('유저 아이디가 필요합니다.');
-}
 if (empty($input['user_location'])) {
     sendError('위치 정보가 필요합니다.');
 }
 
-$user_id       = intval($input['user_id']);
 $user_location = trim($input['user_location']);
 
 $database = new Database();

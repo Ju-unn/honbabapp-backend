@@ -2,7 +2,7 @@
 /**
  * 푸시 알림 on/off 설정 변경
  *
- * POST { "user_id": 7, "push_enabled": 0 }   (1: ON, 0: OFF)
+ * POST { "push_enabled": 0 }   (1: ON, 0: OFF)
  *
  * ProfileNotificationSettingActivity 의 알림 스위치를 토글할 때 호출된다.
  * push_enabled = 0 인 사용자에게는 sendPushToUsers() 발송 단계에서
@@ -15,10 +15,12 @@
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
+
+// 본인 확인 (body의 user_id를 신뢰하지 않음 — 위조 방지)
+$userId = get_user_id_from_token();
 
 $requestBody = json_decode(file_get_contents('php://input'), true);
-
-$userId = isset($requestBody['user_id']) ? intval($requestBody['user_id']) : 0;
 
 $pushEnabledRaw = $requestBody['push_enabled'] ?? null;
 $pushEnabled = null;
@@ -28,8 +30,8 @@ if ($pushEnabledRaw === 0 || $pushEnabledRaw === 1
     $pushEnabled = intval($pushEnabledRaw) === 1 ? 1 : 0;
 }
 
-if ($userId <= 0 || $pushEnabled === null) {
-    sendError('user_id, push_enabled=가 필요합니다');
+if ($pushEnabled === null) {
+    sendError('push_enabled가 필요합니다');
 }
 
 $database = new Database();
@@ -40,13 +42,6 @@ if ($pdo === null) {
 }
 
 try {
-    $checkStatement = $pdo->prepare('SELECT user_id FROM users WHERE user_id = ?');
-    $checkStatement->execute([$userId]);
-
-    if ($checkStatement->fetch() === false) {
-        sendError('사용자를 찾을 수 없습니다');
-    }
-
     $updateStatement = $pdo->prepare('UPDATE users SET push_enabled = ? WHERE user_id = ?');
     $updateStatement->execute([$pushEnabled, $userId]);
 

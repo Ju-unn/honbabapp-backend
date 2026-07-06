@@ -1,17 +1,15 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
  
 // 조회니까 GET
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendError('GET 요청만 허용됩니다', 405);
 }
  
-if (empty($_GET['user_id'])) {
-    sendError('user_id가 필요합니다');
-}
- 
-$user_id = intval($_GET['user_id']);
+// 본인 확인 (쿼리스트링의 user_id를 신뢰하지 않음 — 위조 방지)
+$user_id = get_user_id_from_token();
  
 $database = new Database();
 $db = $database->getConnection();

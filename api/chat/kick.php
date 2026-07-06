@@ -19,35 +19,38 @@
  *
  */
 
-require_once '../config/database.php';
-require_once '../utils/response.php';
-require_once '../utils/socket_emit.php';
-require_once '../utils/push_emit.php';
-
-// ───────────────────────────────────────────
-// 1) 요청 검증
-// ───────────────────────────────────────────
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('POST 요청만 허용됩니다', 405);
-}
-
-$data = json_decode(file_get_contents('php://input'), true);
-if (!$data) {
-    sendError('잘못된 요청 데이터');
-}
-
-$room_id        = isset($data['room_id']) ? intval($data['room_id']) : 0;
-$host_id        = isset($data['host_id']) ? intval($data['host_id']) : 0;
-$target_user_id = isset($data['target_user_id']) ? intval($data['target_user_id']) : 0;
-
-if ($room_id <= 0)        sendError('room_id가 필요합니다');
-if ($host_id <= 0)        sendError('host_id가 필요합니다');
-if ($target_user_id <= 0) sendError('target_user_id가 필요합니다');
-
-// 자기 자신 강퇴 차단 (DB 락 잡기 전에 빠르게 거절)
-if ($host_id === $target_user_id) {
-    sendError('자기 자신은 강퇴할 수 없습니다');
-}
+ require_once '../config/database.php';
+ require_once '../utils/response.php';
+ require_once '../utils/socket_emit.php';
+ require_once '../utils/push_emit.php';
+ require_once '../utils/jwt.php';
+ 
+ // ───────────────────────────────────────────
+ // 1) 요청 검증
+ // ───────────────────────────────────────────
+ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+     sendError('POST 요청만 허용됩니다', 405);
+ }
+ 
+ // 본인 확인 (body의 host_id를 신뢰하지 않음 — 위조 방지)
+ // 강퇴는 타인에게 직접적 피해를 주는 행위라 위조 방지가 특히 중요함
+ $host_id = get_user_id_from_token();
+ 
+ $data = json_decode(file_get_contents('php://input'), true);
+ if (!$data) {
+     sendError('잘못된 요청 데이터');
+ }
+ 
+ $room_id        = isset($data['room_id']) ? intval($data['room_id']) : 0;
+ $target_user_id = isset($data['target_user_id']) ? intval($data['target_user_id']) : 0;
+ 
+ if ($room_id <= 0)        sendError('room_id가 필요합니다');
+ if ($target_user_id <= 0) sendError('target_user_id가 필요합니다');
+ 
+ // 자기 자신 강퇴 차단 (DB 락 잡기 전에 빠르게 거절)
+ if ($host_id === $target_user_id) {
+     sendError('자기 자신은 강퇴할 수 없습니다');
+ }
 
 // ───────────────────────────────────────────
 // 2) DB 연결

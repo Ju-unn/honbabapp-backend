@@ -22,22 +22,25 @@
  * }
  */
 
-require_once '../config/database.php';
-require_once '../utils/response.php';
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('POST 요청만 허용됩니다', 405);
-}
-
-$input = json_decode(file_get_contents('php://input'), true);
-
-// 필수 파라미터 확인
-if (empty($input['meeting_id']) || empty($input['user_id'])) {
-    sendError('meeting_id와 user_id는 필수입니다');
-}
-
-$meeting_id = intval($input['meeting_id']);
-$request_user_id = intval($input['user_id']);
+ require_once '../config/database.php';
+ require_once '../utils/response.php';
+ require_once '../utils/jwt.php';
+ 
+ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+     sendError('POST 요청만 허용됩니다', 405);
+ }
+ 
+ // 본인 확인 (body의 user_id를 신뢰하지 않음 — 위조 방지)
+ $request_user_id = get_user_id_from_token();
+ 
+ $input = json_decode(file_get_contents('php://input'), true);
+ 
+ // 필수 파라미터 확인
+ if (empty($input['meeting_id'])) {
+     sendError('meeting_id는 필수입니다');
+ }
+ 
+ $meeting_id = intval($input['meeting_id']);
 
 // DB 연결
 $database = new Database();

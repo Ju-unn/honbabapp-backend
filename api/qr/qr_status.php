@@ -29,20 +29,23 @@
 
  
  
-require_once '../config/database.php';
-require_once '../utils/response.php';
+ require_once '../config/database.php';
+ require_once '../utils/response.php';
+ require_once '../utils/jwt.php';
+  
+ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+     sendError('GET 요청만 허용됩니다', 405);
+ }
  
-if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-    sendError('GET 요청만 허용됩니다', 405);
-}
- 
-// 필수 파라미터 확인
-if (empty($_GET['meeting_id']) || empty($_GET['user_id'])) {
-    sendError('meeting_id와 user_id는 필수입니다');
-}
- 
-$meeting_id      = intval($_GET['meeting_id']);
-$request_user_id = intval($_GET['user_id']);
+ // 본인 확인 (쿼리스트링의 user_id를 신뢰하지 않음 — 위조 방지)
+ $request_user_id = get_user_id_from_token();
+  
+ // 필수 파라미터 확인
+ if (empty($_GET['meeting_id'])) {
+     sendError('meeting_id는 필수입니다');
+ }
+  
+ $meeting_id = intval($_GET['meeting_id']);
  
 // DB 연결
 $database = new Database();

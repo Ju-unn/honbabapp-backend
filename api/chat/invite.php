@@ -3,10 +3,14 @@ require_once '../config/database.php';
 require_once '../utils/response.php';
 require_once '../utils/socket_emit.php';
 require_once '../utils/push_emit.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
 }
+
+// 본인 확인 (body의 inviter_id를 신뢰하지 않음 — 위조 방지)
+$inviter_id = get_user_id_from_token();
 
 $data = json_decode(file_get_contents('php://input'), true);
 if (!$data) {
@@ -14,11 +18,9 @@ if (!$data) {
 }
 
 $room_id        = isset($data['room_id'])        ? intval($data['room_id'])        : 0;
-$inviter_id     = isset($data['inviter_id'])     ? intval($data['inviter_id'])     : 0;
 $target_user_id = isset($data['target_user_id']) ? intval($data['target_user_id']) : 0;
 
 if ($room_id <= 0)        sendError('room_id가 필요합니다');
-if ($inviter_id <= 0)     sendError('inviter_id가 필요합니다');
 if ($target_user_id <= 0) sendError('target_user_id가 필요합니다');
 
 $database = new Database();

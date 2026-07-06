@@ -30,23 +30,26 @@
  * }
  */
 
-
-require_once '../config/database.php';
-require_once '../config/s3_config.php';
-require_once '../utils/response.php';
-
-
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    exit(0);
-}
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('POST 요청만 허용됩니다', 405);
-}
+ require_once '../config/database.php';
+ require_once '../config/s3_config.php';
+ require_once '../utils/response.php';
+ require_once '../utils/jwt.php';
+ 
+ 
+ header('Access-Control-Allow-Origin: *');
+ header('Access-Control-Allow-Methods: POST, OPTIONS');
+ header('Access-Control-Allow-Headers: Content-Type');
+ 
+ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+     exit(0);
+ }
+ 
+ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+     sendError('POST 요청만 허용됩니다', 405);
+ }
+ 
+ // 본인 확인 (body의 user_id를 신뢰하지 않음 — 위조 방지)
+ $user_id = get_user_id_from_token();
 
 
 // ── 검증 설정 ──────────────────────────────────────────
@@ -61,15 +64,14 @@ try {
         sendError('이미지 파일이 없습니다 (파라미터명: chat_image)');
     }
 
-    if (!isset($_POST['room_id']) || !isset($_POST['user_id'])) {
-        sendError('room_id 와 user_id 는 필수입니다');
+    if (!isset($_POST['room_id'])) {
+        sendError('room_id는 필수입니다');
     }
 
     $room_id = intval($_POST['room_id']);
-    $user_id = intval($_POST['user_id']);
 
-    if ($room_id <= 0 || $user_id <= 0) {
-        sendError('유효하지 않은 room_id 또는 user_id');
+    if ($room_id <= 0) {
+        sendError('유효하지 않은 room_id');
     }
 
     $file = $_FILES['chat_image'];

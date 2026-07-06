@@ -1,22 +1,24 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendError('GET 요청만 허용됩니다', 405);
 }
 
+// 본인 확인 (쿼리스트링의 user_id를 신뢰하지 않음 — 위조 방지)
+$user_id = get_user_id_from_token();
+
 $room_id = isset($_GET['room_id']) ? intval($_GET['room_id']) : 0;
-$user_id = isset($_GET['user_id']) ? intval($_GET['user_id']) : 0;
 $page    = isset($_GET['page'])    ? intval($_GET['page'])    : 1;
 $limit   = isset($_GET['limit'])   ? intval($_GET['limit'])   : 30;
 
 if ($room_id <= 0) {
     sendError('room_id가 필요합니다');
 }
-if ($user_id <= 0) {
-    sendError('user_id가 필요합니다');
-}
+
+
 if ($page < 1) $page = 1;
 if ($limit < 1 || $limit > 100) $limit = 30;
 

@@ -9,6 +9,12 @@ use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use Firebase\JWT\ExpiredException;
 
+// Access Token 만료 시간 (초) - 탈취 시 피해 범위를 줄이기 위해 짧게 유지
+const ACCESS_TOKEN_TTL_SECONDS = 60 * 60 * 2; // 2시간
+
+// Refresh Token 만료 시간 (초)
+const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30일
+
 /**
  * JWT 토큰 발급 함수
  * 로그인/회원가입/소셜로그인 성공 시 호출
@@ -20,7 +26,7 @@ function generate_jwt($user_id) {
     $secret_key = getenv('JWT_SECRET');
 
     $issued_at_time = time();
-    $expiration_time = $issued_at_time + (60 * 60 * 24 * 14); // 발급 후 14일 동안 유효
+    $expiration_time = $issued_at_time + ACCESS_TOKEN_TTL_SECONDS;
 
     $payload = [
         'iat' => $issued_at_time,      // 토큰 발급 시각
@@ -74,5 +80,55 @@ function get_user_id_from_token() {
         sendError('유효하지 않은 인증 정보입니다', 401);
         exit;
     }
+}
+
+/**
+ * Refresh Token 생성 (랜덤 opaque 토큰)
+ *
+ * @return string 64자 hex 문자열 (32바이트 랜덤 값)
+ */
+function generate_refresh_token() {
+    return bin2hex(random_bytes(32));
+}
+
+/**
+ * Refresh Token을 해시하여 DB에 저장한다.
+ * 원본 토큰은 절대 저장하지 않는다 (DB 유출 시 그대로 악용되는 것 방지).
+ *
+ * @param PDO $database 활성화된 DB 커넥션
+ * @param int $user_id 토큰 소유자
+ * @param string $refresh_token 평문 refresh token (클라이언트에 전달할 값)
+ */
+function store_refresh_token($database, $user_id, $refresh_token) {
+    $token_hash = hash('sha256', $refresh_token);
+    $expires_at = date('Y-m-d H:i:s', time() + REFRESH_TOKEN_TTL_SECONDS);
+
+    $insert_refresh_token_statement = $database->prepare("
+        INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+        VALUES (:user_id, :token_hash, :expires_at)
+    ");
+    $insert_refresh_token_statement->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+    $insert_refresh_token_statement->bindParam(':token_hash', $token_hash);
+    $insert_refresh_token_statement->bindParam(':expires_at', $expires_at);
+    $insert_refresh_token_statement->execute();
+}
+
+/**
+ * 로그인/소셜로그인/refresh 성공 시 access token + refresh token을
+ * 한 번에 발급하고, refresh token은 DB 저장까지 완료한다.
+ *
+ * @param PDO $database 활성화된 DB 커넥션
+ * @param int $user_id 토큰을 발급받을 사용자
+ * @return array ['access_token' => string, 'refresh_token' => string]
+ */
+function issue_token_pair($database, $user_id) {
+    $access_token = generate_jwt($user_id);
+    $refresh_token = generate_refresh_token();
+    store_refresh_token($database, $user_id, $refresh_token);
+
+    return [
+        'access_token' => $access_token,
+        'refresh_token' => $refresh_token,
+    ];
 }
 ?>

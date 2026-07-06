@@ -1,23 +1,26 @@
 <?php
 /**
  * 신청자 목록 조회 API
- * GET /api/meeting/applicants.php?meeting_id=1&host_id=2&status=대기
+ * GET /api/meeting/applicants.php?meeting_id=1&status=대기
  *
  */
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendError('GET 요청만 허용됩니다', 405);
 }
 
-if (empty($_GET['meeting_id']) || empty($_GET['host_id'])) {
-    sendError('meeting_id와 host_id가 필요합니다');
+// 본인 확인 (쿼리스트링의 host_id를 신뢰하지 않음 — 위조 방지)
+$host_id = get_user_id_from_token();
+
+if (empty($_GET['meeting_id'])) {
+    sendError('meeting_id가 필요합니다');
 }
 
 $meeting_id = intval($_GET['meeting_id']);
-$host_id    = intval($_GET['host_id']);
 $status     = isset($_GET['status']) ? trim($_GET['status']) : '대기';
 
 $database = new Database();

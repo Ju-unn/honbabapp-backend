@@ -26,6 +26,7 @@
  require_once '../config/database.php';
  require_once '../config/s3_config.php';
  require_once '../utils/response.php';
+ require_once '../utils/jwt.php';
 
 
  header('Access-Control-Allow-Origin: *');
@@ -39,6 +40,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
   sendError('POST 요청만 허용됩니다', 405);
 }
+
+// 로그인된 사용자만 업로드 가능 (기존엔 인증 자체가 없어 누구나 S3에 무제한 업로드 가능했음)
+$authenticated_user_id = get_user_id_from_token();
 
 
 // ── 검증 설정 ──────────────────────────────────────────
@@ -95,7 +99,7 @@ try {
     //    형식: meeting_{timestamp}_{random8}.jpg
     $timestamp = time();
     $randomString = bin2hex(random_bytes(8));
-    $newFileName = "meeting_{$timestamp}_{$randomString}.jpg";
+    $newFileName = "meeting_{$authenticated_user_id}_{$timestamp}_{$randomString}.jpg";
 
     // 7. S3 업로드
     $s3Config = new S3Config();

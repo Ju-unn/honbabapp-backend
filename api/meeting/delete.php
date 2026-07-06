@@ -1,19 +1,22 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
 }
 
+// 본인 확인 (body의 host_id를 신뢰하지 않음 — 위조 방지)
+$host_id = get_user_id_from_token();
+
 $input = json_decode(file_get_contents('php://input'), true);
 
-if (empty($input['meeting_id']) || empty($input['host_id'])) {
-    sendError('meeting_id와 host_id가 필요합니다');
+if (empty($input['meeting_id'])) {
+    sendError('meeting_id가 필요합니다');
 }
 
 $meeting_id = intval($input['meeting_id']);
-$host_id = intval($input['host_id']);
 
 $database = new Database();
 $db = $database->getConnection();

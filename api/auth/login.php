@@ -51,9 +51,26 @@ try {
     $stmt->bindParam(':email', $email);
     $stmt->execute();
     
-    if ($stmt->rowCount() === 0) {
-        sendError('가입되지 않은 이메일입니다');
+   // 변경
+if ($stmt->rowCount() === 0) {
+    // 탈퇴 시 user_email이 NULL로 바뀌므로, 원래 이메일은 
+    // user_withdrawn_email에서만 찾을 수 있다.
+    // 활성 계정 조회에서 이미 못 찾은 경우에만 확인하므로,
+    // 신규 가입자가 과거 탈퇴자의 이메일을 재사용한 경우와 충돌하지 않는다.
+    $withdrawn_check_query = "SELECT user_id FROM users 
+                               WHERE user_withdrawn_email = :email 
+                               AND user_status = '탈퇴' 
+                               LIMIT 1";
+    $withdrawn_check_stmt = $db->prepare($withdrawn_check_query);
+    $withdrawn_check_stmt->bindParam(':email', $email);
+    $withdrawn_check_stmt->execute();
+
+    if ($withdrawn_check_stmt->rowCount() > 0) {
+        sendError('탈퇴한 계정입니다');
     }
+
+    sendError('가입되지 않은 이메일입니다');
+}
     
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -78,9 +95,10 @@ try {
     // 숫자(0/1)를 boolean으로 변환
     $user['user_email_verified'] = (bool)$user['user_email_verified'];
     
-    // JWT 토큰 발급
-    $access_token = generate_jwt($user['user_id']);
-    $user['token'] = $access_token;
+     // Access + Refresh 토큰 쌍 발급
+     $token_pair = issue_token_pair($db, $user['user_id']);
+     $user['token'] = $token_pair['access_token'];
+     $user['refresh_token'] = $token_pair['refresh_token'];
     
     // 성공 응답
     sendSuccess('로그인 성공', $user);

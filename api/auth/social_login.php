@@ -189,10 +189,10 @@ try {
     // 5. 온보딩 필요 여부 판단 (닉네임 또는 위치가 비어있으면 온보딩 필요)
     $needs_onboarding = empty($user['user_nickname']) || empty($user['user_location']);
 
-    // 6. JWT 발급
-    $access_token_jwt = generate_jwt($user['user_id']);
-    $user['token'] = $access_token_jwt;
-    $user['user_email_verified'] = (bool)$user['user_email_verified'];
+      // 6. Access + Refresh 토큰 쌍 발급
+      $token_pair = issue_token_pair($db, $user['user_id']);
+      $user['token'] = $token_pair['access_token'];
+      $user['refresh_token'] = $token_pair['refresh_token'];
 
     $message = $is_new_user ? '소셜 회원가입이 완료되었습니다' : '소셜 로그인 성공';
 

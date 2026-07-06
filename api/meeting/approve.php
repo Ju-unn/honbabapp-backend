@@ -8,25 +8,27 @@
  * - 체험단 채팅은 1:1만 사용 (create_room.php direct 버튼으로 진입)
  * - 승인 상태 / 정원 처리 / 트랜잭션 / 푸시 / WebSocket emit 기존 그대로
  */
-
 require_once '../config/database.php';
 require_once '../utils/response.php';
 require_once '../utils/push_emit.php';
 require_once '../utils/socket_emit.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
 }
 
+// 본인 확인 (body의 host_id를 신뢰하지 않음 — 위조 방지)
+$host_id = get_user_id_from_token();
+
 $input = json_decode(file_get_contents('php://input'), true);
 
-if (empty($input['participant_id']) || empty($input['action']) || empty($input['host_id'])) {
-    sendError('participant_id, action, host_id가 필요합니다');
+if (empty($input['participant_id']) || empty($input['action'])) {
+    sendError('participant_id, action이 필요합니다');
 }
 
 $participant_id = intval($input['participant_id']);
 $action         = trim($input['action']); // 'approve' or 'reject'
-$host_id        = intval($input['host_id']);
 
 if (!in_array($action, ['approve', 'reject'])) {
     sendError('action은 approve 또는 reject여야 합니다');

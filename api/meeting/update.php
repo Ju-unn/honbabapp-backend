@@ -30,47 +30,49 @@
  *
  */
 
-require_once '../config/database.php';
-require_once '../utils/response.php';
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('POST 요청만 허용됩니다', 405);
-}
-
-$input = json_decode(file_get_contents('php://input'), true);
-
-// 필수 필드 확인
-$required_fields = [
-    'meeting_id',
-    'user_id',
-    'meeting_title',
-    'meeting_description',
-    'meeting_category',
-    'meeting_date',
-    'meeting_max_participants',
-    'meeting_price_range',
-    'location'
-];
-
-foreach ($required_fields as $field) {
-    if (empty($input[$field])) {
-        sendError("{$field} 필드는 필수입니다");
-    }
-}
-
-// location 필수 필드 확인
-$location = $input['location'];
-$required_location_fields = ['place_name', 'sigungu'];
-
-foreach ($required_location_fields as $field) {
-    if (empty($location[$field])) {
-        sendError("location.{$field} 필드는 필수입니다");
-    }
-}
-
-// 입력값 정리
-$meeting_id = intval($input['meeting_id']);
-$host_id = intval($input['user_id']);
+ require_once '../config/database.php';
+ require_once '../utils/response.php';
+ require_once '../utils/jwt.php';
+ 
+ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+     sendError('POST 요청만 허용됩니다', 405);
+ }
+ 
+ // 본인 확인 (body의 user_id를 신뢰하지 않음 — 위조 방지)
+ $host_id = get_user_id_from_token();
+ 
+ $input = json_decode(file_get_contents('php://input'), true);
+ 
+ // 필수 필드 확인
+ $required_fields = [
+     'meeting_id',
+     'meeting_title',
+     'meeting_description',
+     'meeting_category',
+     'meeting_date',
+     'meeting_max_participants',
+     'meeting_price_range',
+     'location'
+ ];
+ 
+ foreach ($required_fields as $field) {
+     if (empty($input[$field])) {
+         sendError("{$field} 필드는 필수입니다");
+     }
+ }
+ 
+ // location 필수 필드 확인
+ $location = $input['location'];
+ $required_location_fields = ['place_name', 'sigungu'];
+ 
+ foreach ($required_location_fields as $field) {
+     if (empty($location[$field])) {
+         sendError("location.{$field} 필드는 필수입니다");
+     }
+ }
+ 
+ // 입력값 정리
+ $meeting_id = intval($input['meeting_id']);
 $meeting_title = trim($input['meeting_title']);
 $meeting_description = trim($input['meeting_description']);
 $meeting_category = trim($input['meeting_category']);

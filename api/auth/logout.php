@@ -2,18 +2,15 @@
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
 }
 
-$requestBody = json_decode(file_get_contents('php://input'), true);
-
-$userId = isset($requestBody['user_id']) ? intval($requestBody['user_id']) : 0;
-
-if ($userId <= 0) {
-    sendError('user_id 가 필요합니다');
-}
+// 본인 확인 (body의 user_id를 신뢰하지 않음 — 위조 방지)
+// 이전엔 body의 user_id를 그대로 믿어서 아무나 남의 계정을 로그아웃(FCM 토큰 초기화)시킬 수 있었음
+$userId = get_user_id_from_token();
 
 $database = new Database();
 $db = $database->getConnection();
@@ -23,13 +20,6 @@ if ($db === null) {
 }
 
 try {
-    $checkStatement = $db->prepare('SELECT user_id FROM users WHERE user_id = ?');
-    $checkStatement->execute([$userId]);
-
-    if ($checkStatement->fetch() === false) {
-        sendError('사용자를 찾을 수 없습니다', 404);
-    }
-
     // FCM 토큰 NULL 처리: 이 기기로 더 이상 푸시 알림을 발송하지 않는다
     $clearTokenStatement = $db->prepare(
         'UPDATE users SET fcm_token = NULL, fcm_token_updated_at = NOW() WHERE user_id = ?'

@@ -31,27 +31,30 @@
  */
  
 
-require_once '../config/database.php';
-require_once '../utils/response.php';
+ require_once '../config/database.php';
+ require_once '../utils/response.php';
+ require_once '../utils/jwt.php';
+  
+ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+     sendError('POST 요청만 허용됩니다', 405);
+ }
  
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('POST 요청만 허용됩니다', 405);
-}
+ // 본인 확인 (body의 user_id를 신뢰하지 않음 — 위조 방지)
+ $scanner_user_id = get_user_id_from_token();
+  
+ $input = json_decode(file_get_contents('php://input'), true);
+  
+ // 필수 파라미터 확인
+ if (empty($input['code_token'])) {
+     sendError('code_token은 필수입니다');
+ }
+ if (!isset($input['lat']) || !isset($input['lng'])) {
+     sendError('현재 위치 필수입니다');
+ }
  
-$input = json_decode(file_get_contents('php://input'), true);
- 
-// 필수 파라미터 확인
-if (empty($input['code_token']) || empty($input['user_id'])) {
-    sendError('code_token과 user_id는 필수입니다');
-}
-if (!isset($input['lat']) || !isset($input['lng'])) {
-    sendError('현재 위치 필수입니다');
-}
-
-$code_token      = trim($input['code_token']);
-$scanner_user_id = intval($input['user_id']);
-$scanner_lat     = floatval($input['lat']);   // 스캔 기기의 현재 위도
-$scanner_lng     = floatval($input['lng']);   // 스캔 기기의 현재 경도
+ $code_token  = trim($input['code_token']);
+ $scanner_lat = floatval($input['lat']);
+ $scanner_lng = floatval($input['lng']);
 
 
 // DB 연결

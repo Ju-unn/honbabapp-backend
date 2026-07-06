@@ -8,20 +8,17 @@
  *   (null이면 삭제 의도 → 중복 검사 스킵)
  */
 
-require_once '../config/database.php';
-require_once '../utils/response.php';
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('POST 요청만 허용됩니다', 405);
-}
-
-$input = json_decode(file_get_contents('php://input'), true);
-
-if (empty($input['user_id'])) {
-    sendError('유저 아이디가 필요합니다.');
-}
-
-$user_id = intval($input['user_id']);
+ require_once '../config/database.php';
+ require_once '../utils/response.php';
+ require_once '../utils/jwt.php';
+ 
+ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+     sendError('POST 요청만 허용됩니다', 405);
+ }
+ 
+ $user_id = get_user_id_from_token();
+ 
+ $input = json_decode(file_get_contents('php://input'), true);
 
 // ── 기존 선택적 필드 ─────────────────────────────────────────
 $user_nickname       = isset($input['user_nickname'])       ? trim($input['user_nickname'])       : null;

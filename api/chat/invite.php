@@ -152,7 +152,9 @@ try {
     ]);
 
 } catch (PDOException $e) {
-    $db->rollBack();
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
     sendError('DB 오류: ' . $e->getMessage(), 500);
 }
 ?>

@@ -111,7 +111,9 @@ try {
 
 } catch (PDOException $e) {
     // 중간에 에러 발생 시 전부 롤백 (아무것도 안 지워진 상태로 되돌아감)
-    $db->rollBack();
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
     sendError('계정 탈퇴 중 오류가 발생했습니다: ' . $e->getMessage(), 500);
 }
 

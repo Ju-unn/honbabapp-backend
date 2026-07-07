@@ -240,7 +240,9 @@ try {
     ]);
 
 } catch (PDOException $e) {
-    $db->rollBack();
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
     sendError('모임 수정 중 오류가 발생했습니다: ' . $e->getMessage(), 500);
 }
 ?>

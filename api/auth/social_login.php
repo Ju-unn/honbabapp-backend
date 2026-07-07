@@ -203,7 +203,10 @@ try {
     ]);
 
 } catch (PDOException $e) {
-    $db->rollBack();
+    // commit() 이후(토큰 발급 단계)의 예외면 트랜잭션이 없으므로 무조건 rollBack() 시 2차 예외 발생
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
     sendError('데이터베이스 오류: ' . $e->getMessage(), 500);
 }
 

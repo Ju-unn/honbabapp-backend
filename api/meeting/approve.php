@@ -272,7 +272,9 @@ try {
     sendSuccess($message, $response_data);
 
 } catch (PDOException $e) {
-    $db->rollBack();
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
     sendError('승인/거절 처리 실패: ' . $e->getMessage(), 500);
 }
 ?>

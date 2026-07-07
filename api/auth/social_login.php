@@ -174,11 +174,47 @@ try {
     $user = $user_stmt->fetch(PDO::FETCH_ASSOC);
     $user['user_email_verified'] = (bool)$user['user_email_verified'];
 
-    // 계정 상태 확인 (탈퇴/정지 계정 방지)
+    // 계정 상태 확인
+    // '탈퇴'는 즉시 복원: provider가 본인을 보증하므로 이메일 인증 절차가 불필요하고,
+    // 에러로 막으면 소셜 사용자는 복원 경로가 아예 없음 (register.php의 이메일 복원과 대칭)
+    if ($user['user_status'] === '탈퇴') {
+        // 소셜에서 검증된 이메일이 다른 계정에서 사용 중이 아니면 함께 복구
+        $restore_email = null;
+        if ($verified_email !== null) {
+            $email_owner_stmt = $db->prepare(
+                "SELECT user_id FROM users WHERE user_email = :email AND user_id != :user_id LIMIT 1");
+            $email_owner_stmt->bindParam(':email', $verified_email);
+            $email_owner_stmt->bindParam(':user_id', $user['user_id'], PDO::PARAM_INT);
+            $email_owner_stmt->execute();
+            if ($email_owner_stmt->rowCount() === 0) {
+                $restore_email = $verified_email;
+            }
+        }
+
+        $restore_query = "UPDATE users SET
+                              user_status = '활성',
+                              user_deleted_at = NULL,
+                              user_withdrawn_email = NULL,
+                              user_email = COALESCE(:email, user_email),
+                              user_email_verified = CASE WHEN :email2 IS NULL
+                                                         THEN user_email_verified ELSE 1 END,
+                              user_updated_at = NOW()
+                          WHERE user_id = :user_id";
+        $restore_stmt = $db->prepare($restore_query);
+        $restore_stmt->bindParam(':email', $restore_email);
+        $restore_stmt->bindParam(':email2', $restore_email);
+        $restore_stmt->bindParam(':user_id', $user['user_id'], PDO::PARAM_INT);
+        $restore_stmt->execute();
+
+        // 복원된 정보로 다시 조회 (닉네임이 NULL이므로 아래 온보딩 분기가 자동으로 처리됨)
+        $user_stmt->execute();
+        $user = $user_stmt->fetch(PDO::FETCH_ASSOC);
+        $user['user_email_verified'] = (bool)$user['user_email_verified'];
+    }
+
     if ($user['user_status'] !== '활성') {
         $db->rollBack();
         $msg = match ($user['user_status']) {
-            '탈퇴' => '탈퇴한 계정입니다',
             '정지' => '정지된 계정입니다',
             default => '접근이 제한된 계정입니다',
         };
@@ -187,8 +223,13 @@ try {
 
     $db->commit();
 
-    // 5. 온보딩 필요 여부 판단 (닉네임 또는 위치가 비어있으면 온보딩 필요)
-    $needs_onboarding = empty($user['user_nickname']) || empty($user['user_location']);
+    // 5. 온보딩 필요 여부 판단 — check_onboarding_status.php와 동일한 5개 필드 기준
+    // (하나라도 비어있으면 온보딩 필요. 앱이 비어있는 필드만 골라서 입력받음)
+    $needs_onboarding = empty($user['user_nickname'])
+        || empty($user['user_location'])
+        || empty($user['user_phone_number'])
+        || empty($user['user_gender'])
+        || empty($user['user_birthday']);
 
       // 6. Access + Refresh 토큰 쌍 발급
       $token_pair = issue_token_pair($db, $user['user_id']);

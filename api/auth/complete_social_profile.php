@@ -56,9 +56,11 @@ try {
     }
 
        // 4b. 전화번호 중복 확인 (자기 자신은 제외)
+       // 탈퇴 계정의 번호도 차단: 소셜 신규가입 + 탈퇴 번호 조합으로
+       // 계정을 새로 만들어 매너점수를 초기화하는 악용 방지
        if ($phone_number !== null) {
-        $check_phone_query = "SELECT user_id FROM users 
-                               WHERE user_phone_number = :phone_number 
+        $check_phone_query = "SELECT user_id, user_status FROM users
+                               WHERE user_phone_number = :phone_number
                                AND user_id != :user_id";
         $check_phone_stmt = $db->prepare($check_phone_query);
         $check_phone_stmt->bindParam(':phone_number', $phone_number);
@@ -66,6 +68,10 @@ try {
         $check_phone_stmt->execute();
 
         if ($check_phone_stmt->rowCount() > 0) {
+            $phone_owner = $check_phone_stmt->fetch(PDO::FETCH_ASSOC);
+            if ($phone_owner['user_status'] === '탈퇴') {
+                sendError('이전에 가입한 계정이 있는 전화번호입니다. 기존 계정으로 로그인하면 복원됩니다');
+            }
             sendError('이미 사용중인 전화번호입니다');
         }
     }

@@ -66,7 +66,7 @@ if ($stmt->rowCount() === 0) {
     $withdrawn_check_stmt->execute();
 
     if ($withdrawn_check_stmt->rowCount() > 0) {
-        sendError('탈퇴한 계정입니다');
+        sendError('탈퇴한 계정입니다. 같은 이메일로 다시 가입하면 계정이 복원됩니다');
     }
 
     sendError('가입되지 않은 이메일입니다');

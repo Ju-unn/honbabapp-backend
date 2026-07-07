@@ -23,8 +23,10 @@ $email        = trim($input['email']);
 $password     = $input['password'];
 $phone_number = trim($input['phone_number']);
 $location     = trim($input['location']);
-$birthday     = isset($input['birthday']) ? trim($input['birthday']) : null;
-$gender       = isset($input['gender'])   ? $input['gender']         : null;
+// 빈 문자열은 null로 취급 — 복원 가입 시 앱이 숨긴 필드를 ""로 보내는데,
+// 이대로 UPDATE하면 user_birthday = '' 가 되어 날짜 형식 오류(SQLSTATE 22007)가 남
+$birthday     = isset($input['birthday']) && trim($input['birthday']) !== '' ? trim($input['birthday']) : null;
+$gender       = isset($input['gender'])   && $input['gender'] !== ''         ? $input['gender']         : null;
 $profile_image = isset($input['profile_image']) ? trim($input['profile_image']) : null;
 
 // 연결
@@ -38,12 +40,15 @@ if ($db === null) {
 try {
 
     // 복원 여부 먼저 확인 (birthday/gender 검증 전)
-    $restore_check_query = "SELECT user_id FROM users 
-                            WHERE user_phone_number = :phone 
-                            AND user_status = '탈퇴' 
+    // 기준은 전화번호가 아닌 이메일: 탈퇴 시 원본 이메일이 user_withdrawn_email에 보관되고,
+    // 이 이메일은 아래 1번(인증코드 검증)을 통과해야 하므로 본인 소유가 보장된다.
+    // (전화번호 기준이면 번호가 바뀐 사용자는 복원이 불가능했음)
+    $restore_check_query = "SELECT user_id FROM users
+                            WHERE user_withdrawn_email = :email
+                            AND user_status = '탈퇴'
                             LIMIT 1";
     $restore_check_stmt = $db->prepare($restore_check_query);
-    $restore_check_stmt->bindParam(':phone', $phone_number);
+    $restore_check_stmt->bindParam(':email', $email);
     $restore_check_stmt->execute();
     $is_restore = $restore_check_stmt->rowCount() > 0;
     $existing_id = $is_restore ? $restore_check_stmt->fetchColumn() : null;
@@ -112,13 +117,24 @@ try {
     }
     
     // 4. 전화번호 중복 확인
-    $check_phone_query = "SELECT user_id FROM users WHERE user_phone_number = :phone AND user_status != '탈퇴'";
+    // - 활성/정지 계정 소유 → 차단 (기존과 동일)
+    // - 탈퇴 계정 소유 → 새 이메일로의 신규가입 차단, 이전 이메일로의 복원 유도
+    //   (탈퇴 번호로 계정을 무한 생성해 매너점수를 초기화하는 악용 방지.
+    //    단 복원(is_restore) 중이면 통과 — 새 계정이 생기는 게 아니므로)
+    $check_phone_query = "SELECT user_id, user_status FROM users WHERE user_phone_number = :phone";
     $check_phone_stmt = $db->prepare($check_phone_query);
     $check_phone_stmt->bindParam(':phone', $phone_number);
     $check_phone_stmt->execute();
-    
-    if ($check_phone_stmt->rowCount() > 0) {
-        sendError('이미 사용중인 전화번호입니다');
+    $phone_owners = $check_phone_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($phone_owners as $phone_owner) {
+        if ($phone_owner['user_status'] !== '탈퇴') {
+            sendError('이미 사용중인 전화번호입니다');
+        }
+    }
+
+    if (!$is_restore && count($phone_owners) > 0) {
+        sendError('이전에 가입한 이메일이 있습니다. 이전에 사용하던 이메일로 가입해주세요');
     }
     
     // 5. profile_image URL 검증 (있을 경우)
@@ -141,13 +157,19 @@ try {
 
     if ($is_restore) {
 
+        // 복원 키가 이메일이므로 전화번호는 바뀌었을 수 있음 → 요청 값으로 갱신
+        // birthday/gender는 요청에 있으면 갱신, 없으면 기존 값 유지
         $update_query = "UPDATE users SET
             user_status = '활성',
             user_deleted_at = NULL ,
+            user_withdrawn_email = NULL,
             user_email = :email,
             user_email_verified = 1,
             user_password = :password,
             user_nickname = :nickname,
+            user_phone_number = :phone_number,
+            user_birthday = COALESCE(:birthday, user_birthday),
+            user_gender = COALESCE(:gender, user_gender),
             user_profile_image = :profile_image,
             user_location = :location,
             user_updated_at = NOW()
@@ -157,6 +179,9 @@ try {
         $update_stmt->bindParam(':password', $hashed_password);
         $update_stmt->bindParam(':nickname', $nickname);
         $update_stmt->bindParam(':email', $email);
+        $update_stmt->bindParam(':phone_number', $phone_number);
+        $update_stmt->bindParam(':birthday', $birthday);
+        $update_stmt->bindParam(':gender', $gender);
         $update_stmt->bindParam(':profile_image', $profile_image);
         $update_stmt->bindParam(':location', $location);
         $update_stmt->bindParam(':existing_id', $existing_id, PDO::PARAM_INT);

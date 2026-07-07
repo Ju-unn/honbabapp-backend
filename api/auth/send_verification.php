@@ -50,21 +50,17 @@ try {
     // 6자리 랜덤 인증 코드 생성
     $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     
-    // 만료 시간 (5분)
-    $expires_at = date('Y-m-d H:i:s', strtotime('+5 minutes'));
-    
     // 기존 인증 코드 삭제 (같은 이메일)
     $delete_query = "DELETE FROM email_verifications WHERE email = :email";
     $delete_stmt = $db->prepare($delete_query);
     $delete_stmt->bindParam(':email', $email);
     $delete_stmt->execute();
-    
-    // 새 인증 코드 저장
-    $insert_query = "INSERT INTO email_verifications (email, code, expires_at) VALUES (:email, :code, :expires_at)";
+
+    // 새 인증 코드 저장 — 만료시각(5분)은 verify_code.php의 NOW() 비교와 같은 DB 시계로 계산
+    $insert_query = "INSERT INTO email_verifications (email, code, expires_at) VALUES (:email, :code, DATE_ADD(NOW(), INTERVAL 5 MINUTE))";
     $insert_stmt = $db->prepare($insert_query);
     $insert_stmt->bindParam(':email', $email);
     $insert_stmt->bindParam(':code', $code);
-    $insert_stmt->bindParam(':expires_at', $expires_at);
     $insert_stmt->execute();
     
     // ===== 실제로는 여기서 이메일 발송 =====

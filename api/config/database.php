@@ -1,4 +1,8 @@
 <?php
+// DB 세션 타임존(+9:00)과 PHP date()/time() 기준을 일치시킴
+// (불일치 시 인증코드 만료, QR 만료, 모임날짜 검증 등이 오판됨)
+date_default_timezone_set('Asia/Seoul');
+
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE');

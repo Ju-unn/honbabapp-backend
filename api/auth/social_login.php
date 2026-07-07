@@ -172,6 +172,7 @@ try {
     $user_stmt->bindParam(':user_id', $user_id);
     $user_stmt->execute();
     $user = $user_stmt->fetch(PDO::FETCH_ASSOC);
+    $user['user_email_verified'] = (bool)$user['user_email_verified'];
 
     // 계정 상태 확인 (탈퇴/정지 계정 방지)
     if ($user['user_status'] !== '활성') {

@@ -32,7 +32,6 @@ function normalize_kakao_phone($kakao_phone) {
 /**
  * 카카오 access_token으로 사용자 정보 조회
  *
- * 공식 문서: https://developers.kakao.com/docs/ko/kakaologin/rest-api#req-user-info
  *
  * @param string $access_token 안드로이드 앱이 카카오 SDK로 로그인 후 받은 토큰
  * @return array|null 성공 시 사용자 정보 배열, 실패 시 null

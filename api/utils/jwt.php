@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/response.php'; // sendAuthError 사용 (단독 include 시에도 안전하도록)
 
 // .env 로딩 보장 (Database 생성자가 loadEnv()를 실행함)
 new Database();
@@ -63,7 +64,7 @@ function get_user_id_from_token() {
 
     // 2. "Bearer 토큰값" 형식인지 확인하고 토큰값만 추출
     if (empty($auth_header) || !preg_match('/Bearer\s+(.+)/', $auth_header, $matches)) {
-        sendError('로그인이 필요합니다 (토큰 없음)', 401);
+        sendAuthError('로그인이 필요합니다 (토큰 없음)');
         exit;
     }
 
@@ -74,10 +75,10 @@ function get_user_id_from_token() {
         $decoded = JWT::decode($jwt_token, new Key($secret_key, 'HS256'));
         return (int)$decoded->user_id;
     } catch (ExpiredException $e) {
-        sendError('로그인이 만료되었습니다. 다시 로그인해주세요', 401);
+        sendAuthError('로그인이 만료되었습니다. 다시 로그인해주세요');
         exit;
     } catch (Exception $e) {
-        sendError('유효하지 않은 인증 정보입니다', 401);
+        sendAuthError('유효하지 않은 인증 정보입니다');
         exit;
     }
 }

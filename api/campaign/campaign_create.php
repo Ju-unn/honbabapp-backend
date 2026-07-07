@@ -45,9 +45,18 @@ $campaignRequirements = isset($input['campaign_requirements']) ? trim($input['ca
 $campaignDeadline     = isset($input['campaign_deadline'])     ? trim($input['campaign_deadline'])     : null;
 
 // ── 체험단 필수 필드 검증 ────────────────────────────────────
-if (empty($campaignChannels)) sendError('체험단은 홍보 채널을 선택해야 합니다');
+if (empty($campaignChannels)) sendError('체험단은 홍보 플랫폼을 선택해야 합니다');
 if (empty($campaignProvided)) sendError('체험단은 제공 내역을 입력해야 합니다');
 if (empty($campaignDeadline)) sendError('모집 마감일을 선택해주세요');
+
+// ── 제목·설명 길이 검증 (campaign_update.php와 동일 기준) ────
+if (mb_strlen($meetingTitle) < 2 || mb_strlen($meetingTitle) > 50) {
+    sendError('체험단 제목은 2~50자 이내로 입력해주세요');
+}
+
+if (mb_strlen($meetingDescription) < 10 || mb_strlen($meetingDescription) > 500) {
+    sendError('체험단 설명은 10~500자 이내로 입력해주세요');
+}
 
 // ── 인원 상한 검사 (체험단: 2~20명) ──────────────────────────
 if ($meetingMaxParticipants < 2 || $meetingMaxParticipants > 20) {

@@ -39,6 +39,15 @@ $meetingPriceRange      = isset($input['meeting_price_range']) ? trim($input['me
 $meetingImage           = isset($input['meeting_image']) ? trim($input['meeting_image']) : null;
 $location               = $input['location'];
 
+// ── 제목·설명 길이 검증 (update.php와 동일 기준) ─────────────
+if (mb_strlen($meetingTitle) < 5 || mb_strlen($meetingTitle) > 30) {
+    sendError('모임명은 5-30자 이내로 입력해주세요');
+}
+
+if (mb_strlen($meetingDescription) < 10 || mb_strlen($meetingDescription) > 100) {
+    sendError('모임 설명은 최소 10~100자 이상 입력해주세요');
+}
+
 // ── 인원 상한 검사 (일반 모임: 2~10명) ───────────────────────
 if ($meetingMaxParticipants < 2 || $meetingMaxParticipants > 10) {
     sendError('최대 참여 인원은 2~10명 사이여야 합니다');

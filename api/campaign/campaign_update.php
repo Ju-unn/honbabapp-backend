@@ -110,8 +110,8 @@ if (mb_strlen($meeting_title) < 2 || mb_strlen($meeting_title) > 50) {
     sendError('체험단 제목은 2~50자 이내로 입력해주세요');
 }
 
-if (mb_strlen($meeting_description) < 5 || mb_strlen($meeting_description) > 500) {
-    sendError('체험단 설명은 5~500자 이내로 입력해주세요');
+if (mb_strlen($meeting_description) < 10 || mb_strlen($meeting_description) > 500) {
+    sendError('체험단 설명은 10~500자 이내로 입력해주세요');
 }
 
 // 체험단 인원 상한 2~20

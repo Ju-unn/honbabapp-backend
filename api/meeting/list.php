@@ -94,12 +94,19 @@ if ($is_hot !== null) {
 }
 
 // 가격
+// meeting_price_range는 "10,000원 ~ 30,000원" 형식의 구간 문자열이다.
+// 하한/상한을 각각 파싱해서 필터 구간과 "겹치는" 모임을 찾는다.
+// ('~'가 없는 값이면 SUBSTRING_INDEX가 전체 문자열을 반환 → 하한=상한 단일값으로 동작)
+$price_lower_sql = "CAST(REPLACE(REPLACE(TRIM(SUBSTRING_INDEX(m.meeting_price_range, '~', 1)), ',', ''), '원', '') AS UNSIGNED)";
+$price_upper_sql = "CAST(REPLACE(REPLACE(TRIM(SUBSTRING_INDEX(m.meeting_price_range, '~', -1)), ',', ''), '원', '') AS UNSIGNED)";
 if ($min_price !== null) {
-    $where_conditions[] = "CAST(REPLACE(REPLACE(m.meeting_price_range, ',', ''), '원', '') AS UNSIGNED) >= :min_price";
+    // 모임 구간의 상한이 필터 하한보다 크거나 같아야 겹침
+    $where_conditions[] = "{$price_upper_sql} >= :min_price";
     $params[':min_price'] = $min_price;
 }
 if ($max_price !== null) {
-    $where_conditions[] = "CAST(REPLACE(REPLACE(m.meeting_price_range, ',', ''), '원', '') AS UNSIGNED) <= :max_price";
+    // 모임 구간의 하한이 필터 상한보다 작거나 같아야 겹침
+    $where_conditions[] = "{$price_lower_sql} <= :max_price";
     $params[':max_price'] = $max_price;
 }
 

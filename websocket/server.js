@@ -619,27 +619,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // member_joined fan-out
-  socket.on('member_joined', async (data) => {
-    console.log(
-      'member_joined room:' + data.room_id + ' new_member:' + data.user_id,
-    );
-    try {
-      const [members] = await pool.execute(
-        'SELECT user_id FROM chat_room_members WHERE room_id = ?',
-        [data.room_id],
-      );
-      for (const m of members) {
-        io.to(`user_${m.user_id}`).emit('member_joined', {
-          room_id: data.room_id,
-          new_member_id: data.user_id,
-        });
-      }
-    } catch (err) {
-      console.error('member_joined fan-out 실패:', err.message);
-    }
-  });
-
   // 연결 종료
   socket.on('disconnect', () => {
     console.log('연결 종료 - user_id:' + socket.data.userId);

@@ -105,19 +105,20 @@ try {
         $params[':profile_image'] = $profile_image;
     }
 
-    if (empty($set_parts)) {
-        sendError('수정할 항목이 없습니다');
-    }
+    // 수정할 항목이 없어도 성공으로 처리한다.
+    // 에러를 반환하면 이미 정보가 채워진 계정이 온보딩 화면에서 빠져나가지
+    // 못하는 교착이 생길 수 있다 (아래에서 현재 사용자 정보를 그대로 응답).
+    if (!empty($set_parts)) {
+        $set_clause = implode(', ', $set_parts);
+        $update_query = "UPDATE users SET $set_clause WHERE user_id = :user_id";
 
-    $set_clause = implode(', ', $set_parts);
-    $update_query = "UPDATE users SET $set_clause WHERE user_id = :user_id";
-
-    $update_stmt = $db->prepare($update_query);
-    foreach ($params as $key => $value) {
-        $update_stmt->bindValue($key, $value);
+        $update_stmt = $db->prepare($update_query);
+        foreach ($params as $key => $value) {
+            $update_stmt->bindValue($key, $value);
+        }
+        $update_stmt->bindValue(':user_id', $user_id, PDO::PARAM_INT);
+        $update_stmt->execute();
     }
-    $update_stmt->bindValue(':user_id', $user_id, PDO::PARAM_INT);
-    $update_stmt->execute();
 
     // 6. 갱신된 사용자 정보 조회해서 응답
     $user_query = "SELECT user_id, user_email, user_nickname, user_profile_image, 

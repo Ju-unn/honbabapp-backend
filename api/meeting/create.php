@@ -53,6 +53,12 @@ if ($meetingMaxParticipants < 2 || $meetingMaxParticipants > 10) {
     sendError('최대 참여 인원은 2~10명 사이여야 합니다');
 }
 
+// ── 모임 날짜 검증  ──────────────────
+$meetingDateTimestamp = strtotime($meetingDate);
+if ($meetingDateTimestamp === false || $meetingDateTimestamp < time()) {
+    sendError('모임 날짜는 현재 시간 이후로 설정해주세요');
+}
+
 $database = new Database();
 $databaseConnection = $database->getConnection();
 

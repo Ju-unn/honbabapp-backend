@@ -38,8 +38,6 @@
  *
  * 점수 환산: rating(1~5) * 0.2  →  0.2 / 0.4 / 0.6 / 0.8 / 1.0
  */
-
- <?php
  require_once '../config/database.php';
  require_once '../utils/response.php';
  require_once '../utils/push_emit.php';

@@ -273,6 +273,7 @@ try {
         //   - 호스트 위임 발생 → 두 줄 ("○○님이 새 방장이 되었습니다." + "○○님이 나갔습니다.")
         //   - 일반 참여자/위임 없는 호스트 → 한 줄 ("○○님이 나갔습니다.")
         $messages_to_insert = [];
+        $system_messages_for_emit = [];
         if ($is_host_transferred) {
             $messages_to_insert[] = $new_host_nickname . '님이 새 방장이 되었습니다.';
         }
@@ -282,8 +283,21 @@ try {
             INSERT INTO chat_messages (room_id, sender_id, msg_type, content, created_at)
             VALUES (?, NULL, 'system', ?, NOW())
         ");
+        $created_at_stmt = $db->prepare("
+            SELECT created_at FROM chat_messages WHERE message_id = ?
+        ");
         foreach ($messages_to_insert as $msg_content) {
             $insert_stmt->execute([$room_id, $msg_content]);
+
+            // 커밋 후 message 이벤트로 broadcast하기 위해 보관
+            $message_id = (int)$db->lastInsertId();
+            $created_at_stmt->execute([$message_id]);
+            $created_row = $created_at_stmt->fetch(PDO::FETCH_ASSOC);
+            $system_messages_for_emit[] = [
+                'message_id' => $message_id,
+                'content'    => $msg_content,
+                'created_at' => $created_row ? $created_row['created_at'] : date('Y-m-d H:i:s'),
+            ];
         }
 
         // 6-5) chat_rooms.last_message 업데이트 (마지막 메시지로)
@@ -349,6 +363,18 @@ try {
                 'room_id'      => $room_id,
                 'new_host_id'  => $new_host_id,
                 'new_nickname' => $new_host_nickname,
+            ]);
+        }
+
+        // → 열려있는 채팅방 화면에 "나갔습니다"/"새 방장" 문구가 실시간 표시됨
+        foreach ($system_messages_for_emit as $sys_message) {
+            emit_to_room($room_id, 'message', [
+                'room_id'    => $room_id,
+                'message_id' => $sys_message['message_id'],
+                'msg_type'   => 'system',
+                'sender_id'  => null,
+                'content'    => $sys_message['content'],
+                'created_at' => $sys_message['created_at'],
             ]);
         }
     }

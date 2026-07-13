@@ -196,6 +196,13 @@ try {
         VALUES (?, NULL, 'system', ?, NOW())
     ");
     $stmt->execute([$room_id, $sys_msg]);
+    $sys_msg_id = (int)$db->lastInsertId();
+
+    // created_at 조회 
+    $stmt = $db->prepare("SELECT created_at FROM chat_messages WHERE message_id = ?");
+    $stmt->execute([$sys_msg_id]);
+    $msg_row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $sys_msg_created_at = $msg_row ? $msg_row['created_at'] : date('Y-m-d H:i:s');
 
     // chat_rooms.last_message 업데이트
     $stmt = $db->prepare("
@@ -237,6 +244,17 @@ try {
         'nickname'  => $target_nickname,
         'remaining' => $remaining,
         'reason'    => 'kicked',
+    ]);
+
+    // 12-1-1) 시스템 메시지를 message 이벤트로 broadcast
+    // 열려있는 채팅방 화면에 "강퇴되었습니다" 문구가 실시간 표시됨
+    emit_to_room($room_id, 'message', [
+        'room_id'    => $room_id,
+        'message_id' => $sys_msg_id,
+        'msg_type'   => 'system',
+        'sender_id'  => null,
+        'content'    => $sys_msg,
+        'created_at' => $sys_msg_created_at,
     ]);
 
     // 12-2) 강퇴 당사자에게 직접 통보

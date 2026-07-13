@@ -35,7 +35,6 @@
  *      reviewee: 리뷰 가능 집합(승인된 참여자 + 호스트)에 속하는지 확인
  *   3. 중복 제출 사전 체크
  *   4. 트랜잭션: meeting_reviews INSERT + users.user_manner_score 가산
- *
  * 점수 환산: rating(1~5) * 0.2  →  0.2 / 0.4 / 0.6 / 0.8 / 1.0
  */
  require_once '../config/database.php';

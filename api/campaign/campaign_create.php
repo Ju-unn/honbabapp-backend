@@ -73,9 +73,16 @@ if ($campaignDeadlineTimestamp === false) {
     sendError('모집 마감일 형식이 올바르지 않습니다');
 }
 
+// 마감일은 그 날의 끝(23:59:59)으로 정규화한다.
+// 00:00:00으로 저장하면 meeting_date(=마감일)가 자정 직후부터 만료 처리되어
+// 마감일 당일에 목록에서 사라지고 신청도 막힌다.
+$campaignDeadline = date('Y-m-d', $campaignDeadlineTimestamp) . ' 23:59:59';
+$campaignDeadlineTimestamp = strtotime($campaignDeadline);
+
 // 주의: strtotime()/date()는 서버 PHP 프로세스의 타임존을 기준으로 계산된다.
 // database.php의 DB 세션 타임존(KST, +9:00)과 일치하는지 배포 환경에서 확인할 것.
-$campaignDeadlineMaximumTimestamp = strtotime('+14 days');
+// 14일 제한은 날짜 기준: 등록일로부터 14일째 되는 날까지(그 날의 끝까지) 허용
+$campaignDeadlineMaximumTimestamp = strtotime(date('Y-m-d', strtotime('+14 days')) . ' 23:59:59');
 if ($campaignDeadlineTimestamp > $campaignDeadlineMaximumTimestamp) {
     sendError('모집 마감일은 등록일로부터 최대 14일 이내로 설정해주세요');
 }

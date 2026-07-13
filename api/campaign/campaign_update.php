@@ -165,12 +165,23 @@ try {
     if ($original_registration_timestamp === false) {
         sendError('모임 등록일 정보를 확인할 수 없어 마감일을 처리할 수 없습니다. 관리자에게 문의해주세요', 500);
     }
-    $campaign_deadline_maximum_timestamp = $original_registration_timestamp + (14 * 24 * 60 * 60);
+    // 14일 제한은 날짜 기준: 등록일로부터 14일째 되는 날까지(그 날의 끝까지) 허용
+    $campaign_deadline_maximum_timestamp = strtotime(
+        date('Y-m-d', $original_registration_timestamp + (14 * 24 * 60 * 60)) . ' 23:59:59'
+    );
 
     $campaign_deadline_timestamp = strtotime($campaign_deadline);
     if ($campaign_deadline_timestamp === false) {
         sendError('모집 마감일 형식이 올바르지 않습니다');
     }
+
+    // 마감일은 그 날의 끝(23:59:59)으로 정규화한다.
+    // 00:00:00으로 저장하면 meeting_date(=마감일)가 자정 직후부터 만료 처리되어
+    // 마감일 당일에 목록에서 사라지고 신청도 막힌다.
+    // (기존 00:00:00으로 저장된 체험단도 수정 시 여기서 보정된다)
+    $campaign_deadline = date('Y-m-d', $campaign_deadline_timestamp) . ' 23:59:59';
+    $campaign_deadline_timestamp = strtotime($campaign_deadline);
+
     if ($campaign_deadline_timestamp > $campaign_deadline_maximum_timestamp) {
         sendError('모집 마감일은 등록일로부터 최대 14일 이내로 설정해주세요');
     }

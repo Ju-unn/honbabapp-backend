@@ -2,6 +2,7 @@ const { Server } = require('socket.io');
 const mysql = require('mysql2/promise');
 const cron = require('node-cron');
 const admin = require('firebase-admin');
+const jwt = require('jsonwebtoken');
 require('dotenv').config({ path: '/var/www/html/.env' });
 
 const pool = mysql.createPool({
@@ -409,7 +410,26 @@ io.on('connection', (socket) => {
   // 방 단위가 아니라 유저 단위로 채널 등록
   // → 앱 켜지면 login 한 번으로 모든 채팅방 이벤트 수신 가능
   socket.on('login', (data) => {
-    socket.data.userId = data.user_id;
+    // access token 검증 — user_id를 위조한 login으로 타인의 채팅 이벤트를
+    // 수신하는 것을 차단한다. PHP(api/utils/jwt.php)와 동일한 JWT_SECRET/HS256 사용.
+    try {
+      const decoded = jwt.verify(data.token, process.env.JWT_SECRET, {
+        algorithms: ['HS256'],
+      });
+      if (parseInt(decoded.user_id, 10) !== parseInt(data.user_id, 10)) {
+        console.warn(
+          `login 거부: token user(${decoded.user_id}) != payload user(${data.user_id})`,
+        );
+        socket.emit('login_error', { content: '인증 정보가 일치하지 않습니다' });
+        return;
+      }
+    } catch (err) {
+      console.warn('login 거부: 토큰 검증 실패 -', err.message);
+      socket.emit('login_error', { content: '유효하지 않은 인증 정보입니다' });
+      return;
+    }
+
+    socket.data.userId = parseInt(data.user_id, 10);
     socket.join(`user_${data.user_id}`); // "user_5" 같은 개인 채널에 등록
     console.log(`user_${data.user_id} 로그인 등록`);
     socket.emit('system', { content: '로그인 등록 완료' });

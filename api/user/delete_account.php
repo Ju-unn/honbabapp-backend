@@ -81,6 +81,65 @@ try {
     $stmtC->bindParam(':user_id', $user_id, PDO::PARAM_INT);
     $stmtC->execute();
 
+    // ── 채팅 정리 ─────────────────────────────────
+    // (1) 내가 방장(owner_id)인 group 채팅방 처리
+    //     leave.php 호스트 나가기와 같은 정책:
+    //     - 남은 멤버가 있으면 매너점수 DESC, 입장순 ASC 1위에게 방장 위임
+    //     - 나 혼자면 방 데이터 전체 정리
+    //     (모임 자체는 위 stmtC에서 '취소' 처리됨 — 채팅방은 참여자들이
+    //      계속 쓸 수 있게 유지하되 방장만 넘긴다)
+    $ownedRoomsStmt = $db->prepare("
+        SELECT room_id FROM chat_rooms
+        WHERE owner_id = :user_id AND room_type = 'group'
+        FOR UPDATE
+    ");
+    $ownedRoomsStmt->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+    $ownedRoomsStmt->execute();
+    $owned_rooms = $ownedRoomsStmt->fetchAll(PDO::FETCH_COLUMN);
+
+    $candidateStmt = $db->prepare("
+        SELECT crm.user_id
+        FROM chat_room_members crm
+        JOIN users u ON crm.user_id = u.user_id
+        WHERE crm.room_id = :room_id AND crm.user_id != :user_id
+        ORDER BY u.user_manner_score DESC, crm.joined_at ASC
+        LIMIT 1
+    ");
+
+    foreach ($owned_rooms as $owned_room_id) {
+        $candidateStmt->execute([':room_id' => $owned_room_id, ':user_id' => $user_id]);
+        $new_owner_id = $candidateStmt->fetchColumn();
+
+        if ($new_owner_id) {
+            $stmt = $db->prepare("UPDATE chat_rooms SET owner_id = ? WHERE room_id = ?");
+            $stmt->execute([intval($new_owner_id), $owned_room_id]);
+        } else {
+            // 나 혼자 남은 방 → 통째 정리 (leave.php와 동일한 FK 순서:
+            // chat_message_reads → chat_messages → chat_room_members → chat_rooms)
+            $stmt = $db->prepare("
+                DELETE cmr FROM chat_message_reads cmr
+                INNER JOIN chat_messages cm ON cmr.message_id = cm.message_id
+                WHERE cm.room_id = ?
+            ");
+            $stmt->execute([$owned_room_id]);
+
+            $stmt = $db->prepare("DELETE FROM chat_messages WHERE room_id = ?");
+            $stmt->execute([$owned_room_id]);
+
+            $stmt = $db->prepare("DELETE FROM chat_room_members WHERE room_id = ?");
+            $stmt->execute([$owned_room_id]);
+
+            $stmt = $db->prepare("DELETE FROM chat_rooms WHERE room_id = ?");
+            $stmt->execute([$owned_room_id]);
+        }
+    }
+
+    // (2) 모든 채팅방 멤버십 제거 (유령 멤버 방지 —
+    //     남은 방들의 참여자 목록/인원수에서 탈퇴자가 빠지게 됨)
+    $stmtE = $db->prepare("DELETE FROM chat_room_members WHERE user_id = :user_id");
+    $stmtE->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+    $stmtE->execute();
+
     // 탈퇴
     // user 행을 지우는게 아니라 상태만 바꾸기
     // user_id 동일하게 유지 재가입시 manner_score 악용방지
@@ -92,7 +151,9 @@ try {
             user_email_verified = 0,
             user_withdrawn_email = user_email,
             user_email = NULL,
-            user_nickname = NULL, 
+            user_nickname = NULL,
+            fcm_token = NULL,
+            fcm_token_updated_at = NOW(),
             user_updated_at = NOW()
         WHERE user_id = :user_id AND user_status = '활성' ");
 

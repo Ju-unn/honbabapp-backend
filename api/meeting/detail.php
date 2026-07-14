@@ -77,6 +77,14 @@ try {
     $participant_stmt->execute();
     $participants = $participant_stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // 탈퇴한 참여자 닉네임 폴백 (과거 모임은 탈퇴자의 참여 기록이 보존됨)
+    foreach ($participants as &$p) {
+        if ($p['user_nickname'] === null || $p['user_nickname'] === '') {
+            $p['user_nickname'] = '탈퇴한 유저';
+        }
+    }
+    unset($p);
+
     // 내 참여 상태 (기존 그대로)
     $my_participation_status = null;
     if ($user_id !== null) {
@@ -124,7 +132,9 @@ try {
         ],
         'host' => [
             'user_id'            => (int)$row['host_user_id'],
-            'user_nickname'      => $row['host_nickname'],
+            // 호스트 탈퇴 시 user_nickname = NULL → "탈퇴한 유저"로 표시
+            'user_nickname'      => ($row['host_nickname'] !== null && $row['host_nickname'] !== '')
+                                        ? $row['host_nickname'] : '탈퇴한 유저',
             'user_profile_image' => $row['host_profile_image'],
             'user_manner_score'  => (float)$row['host_manner_score'],
             'user_gender'        => $row['host_gender'],

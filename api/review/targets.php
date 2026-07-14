@@ -164,7 +164,10 @@ try {
                AND mr.reviewer_id = ?
                AND mr.reviewee_id = u.user_id
             WHERE u.user_id IN ($placeholders)
+              AND u.user_status != '탈퇴'
         ";
+        // 탈퇴한 유저는 후기 대상에서 제외 (프로필이 사라져 후기 의미 없음
+        // → 목록에 아예 안 내려보내면 앱 수정 없이 표시도 안 됨)
 
         // 파라미터 순서: meeting_id, reviewer_id(요청자), 그 다음 target_ids 전체
         $params = array_merge([$meeting_id, $request_user_id], $target_ids);

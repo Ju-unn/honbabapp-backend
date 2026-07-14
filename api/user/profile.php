@@ -44,6 +44,7 @@ try {
                 u.push_enabled,
                 u.user_instagram_id,
                 u.user_blog_id,
+                u.user_status,
                 sa.provider AS social_provider
               FROM users u
               LEFT JOIN social_accounts sa ON sa.user_id = u.user_id
@@ -69,6 +70,20 @@ try {
     $user['user_instagram_id'] = $user['user_instagram_id'] ?? null;
     $user['user_blog_id']      = $user['user_blog_id'] ?? null;
     $user['social_provider']   = $user['social_provider'] ?? null;
+
+    // 탈퇴한 사용자 처리:
+    // - 닉네임은 "탈퇴한 유저"로 표시
+    // - 상태메시지/SNS ID 등 탈퇴 시 정리되지 않는 개인 정보는 응답에서 제거
+    // - user_status 필드로 앱에서 탈퇴 여부 판별 가능 (채팅/후기 버튼 숨김 등)
+    if ($user['user_status'] === '탈퇴') {
+        $user['user_nickname']       = '탈퇴한 유저';
+        $user['user_status_message'] = null;
+        $user['user_instagram_id']   = null;
+        $user['user_blog_id']        = null;
+        $user['social_provider']     = null;
+        $user['user_birthday']       = null;
+        $user['user_gender']         = null;
+    }
 
     sendSuccess('프로필 조회 성공', $user);
 

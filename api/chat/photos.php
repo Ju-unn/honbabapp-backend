@@ -129,6 +129,11 @@ try {
         $mid   = intval($photo['message_id']);
         $sid   = $photo['sender_id'] !== null ? intval($photo['sender_id']) : null;
         $sname = $photo['sender_name'];
+
+        // 탈퇴한 발신자 처리 (messages.php와 동일한 정책)
+        if ($sid !== null && ($sname === null || $sname === '')) {
+            $sname = '탈퇴한 유저';
+        }
         $cat   = $photo['created_at'];
 
         // image_urls 정규화: 신규 묶음 → 배열, 구버전 → 단일 폴백

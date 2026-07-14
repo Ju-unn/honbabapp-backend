@@ -152,6 +152,7 @@ try {
             user_withdrawn_email = user_email,
             user_email = NULL,
             user_nickname = NULL,
+            user_profile_image = NULL,
             fcm_token = NULL,
             fcm_token_updated_at = NOW(),
             user_updated_at = NOW()

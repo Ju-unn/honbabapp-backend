@@ -71,6 +71,22 @@ try {
             $room['owner_id']     = intval($room['owner_id']);
             $room['unread_count'] = intval($room['unread_count']);
             $room['meeting_id']   = $room['meeting_id'] ? intval($room['meeting_id']) : null;
+
+            // direct 방 이름은 저장된 스냅샷 대신 동적으로 계산
+            // - 상대방이 있으면: 현재 닉네임 (닉네임 변경 자동 반영)
+            // - 상대방이 없으면: 탈퇴 시 chat_room_members에서 삭제된 경우 → "탈퇴한 유저"
+            if ($room['room_type'] === 'direct') {
+                $other_nickname = null;
+                foreach ($room['participants'] as $p) {
+                    if (intval($p['user_id']) !== intval($user_id)) {
+                        $other_nickname = $p['user_nickname'];
+                        break;
+                    }
+                }
+                $room['room_name'] = ($other_nickname !== null && $other_nickname !== '')
+                    ? $other_nickname
+                    : '탈퇴한 유저';
+            }
         }
     }
 

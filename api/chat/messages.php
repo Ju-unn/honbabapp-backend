@@ -87,6 +87,14 @@ try {
         $msg['message_id'] = intval($msg['message_id']);
         $msg['room_id']    = intval($msg['room_id']);
         $msg['sender_id']  = $msg['sender_id'] ? intval($msg['sender_id']) : null;
+
+        // 탈퇴한 발신자 처리: sender_id는 있는데 닉네임이 NULL/빈값이면
+        // (탈퇴 시 user_nickname = NULL 처리됨) → "탈퇴한 유저"로 표시
+        // 시스템 메시지(sender_id NULL)는 발신자가 없는 게 정상이므로 제외
+        if ($msg['sender_id'] !== null
+            && ($msg['sender_name'] === null || $msg['sender_name'] === '')) {
+            $msg['sender_name'] = '탈퇴한 유저';
+        }
         // 안읽은 수 = 전체 멤버 수 - 읽은 수
         $msg['unread_count'] = ($member_count - 1) - intval($msg['read_count']);
         if ($msg['unread_count'] < 0) $msg['unread_count'] = 0;

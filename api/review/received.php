@@ -32,10 +32,14 @@
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendError('GET 요청만 허용됩니다', 405);
 }
+
+// 로그인한 사용자만 조회 가능 (후기 자체는 익명이지만 비로그인 크롤링 방지)
+get_user_id_from_token();
 
 if (empty($_GET['user_id'])) {
     sendError('user_id는 필수입니다');

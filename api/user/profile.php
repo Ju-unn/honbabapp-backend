@@ -10,10 +10,15 @@
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/jwt.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendError('GET 요청만 허용됩니다', 405);
 }
+
+// 로그인한 사용자만 조회 가능 (비로그인 상태로 user_id를 바꿔가며
+// 이메일/생일 등을 긁어가는 것 방지)
+$requester_id = get_user_id_from_token();
 
 if (empty($_GET['user_id'])) {
     sendError('user_id가 필요합니다.');
@@ -83,6 +88,19 @@ try {
         $user['social_provider']     = null;
         $user['user_birthday']       = null;
         $user['user_gender']         = null;
+    }
+
+    // 타인 프로필 조회 시 민감 정보 제거
+    // (이메일/생일/성별/푸시설정/로그인수단은 본인의 계정관리 화면에서만 필요.
+    //  타인 프로필 화면은 닉네임/사진/상태메시지/매너점수/참여횟수만 사용)
+    if ($requester_id !== $user_id) {
+        unset(
+            $user['user_email'],
+            $user['user_birthday'],
+            $user['user_gender'],
+            $user['push_enabled'],
+            $user['social_provider']
+        );
     }
 
     sendSuccess('프로필 조회 성공', $user);

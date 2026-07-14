@@ -1,6 +1,7 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/mailer.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -50,26 +51,32 @@ try {
     
     // 6자리 랜덤 인증 코드 생성
     $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-    
-    // 기존 인증 코드 삭제 (같은 이메일)
-    $delete_query = "DELETE FROM email_verifications WHERE email = :email";
+
+    // 기존 인증 코드 삭제 (같은 이메일의 가입용 코드만 — 재설정용 코드는 건드리지 않음)
+    $delete_query = "DELETE FROM email_verifications WHERE email = :email AND purpose = 'signup'";
     $delete_stmt = $db->prepare($delete_query);
     $delete_stmt->bindParam(':email', $email);
     $delete_stmt->execute();
 
     // 새 인증 코드 저장 — 만료시각(5분)은 verify_code.php의 NOW() 비교와 같은 DB 시계로 계산
-    $insert_query = "INSERT INTO email_verifications (email, code, expires_at) VALUES (:email, :code, DATE_ADD(NOW(), INTERVAL 5 MINUTE))";
+    $insert_query = "INSERT INTO email_verifications (email, code, purpose, expires_at) VALUES (:email, :code, 'signup', DATE_ADD(NOW(), INTERVAL 5 MINUTE))";
     $insert_stmt = $db->prepare($insert_query);
     $insert_stmt->bindParam(':email', $email);
     $insert_stmt->bindParam(':code', $code);
     $insert_stmt->execute();
-    
-    // ===== 실제로는 여기서 이메일 발송 =====
-    // mail() 함수나 PHPMailer 사용
-    // 개발 단계에서는 코드를 응답으로 반환
-    
+
+    // 인증코드 메일 발송 (PHPMailer + SMTP)
+    $mail_sent = sendMail(
+        $email,
+        '[혼밥앱] 회원가입 인증코드',
+        buildVerificationCodeEmail($code, '회원가입')
+    );
+
+    if (!$mail_sent) {
+        sendError('인증 메일 발송에 실패했습니다. 잠시 후 다시 시도해주세요', 500);
+    }
+
     sendSuccess('인증 코드가 발송되었습니다', [
-        'code' => $code, // 실제 운영에서는 삭제해야 함!
         'expires_in' => 300 // 5분 (초 단위)
     ]);
     

@@ -30,6 +30,14 @@ $lng             = isset($_GET['lng'])    ? floatval($_GET['lng']) : null;
 $radius          = isset($_GET['radius']) ? floatval($_GET['radius']) : 5.0;
 $order_by        = isset($_GET['order_by']) ? trim($_GET['order_by']) : null;
 
+// ── 뷰포트 bbox 파라미터 (MapFragment 전용, 4개 모두 있어야 활성화) ──
+// 지도 화면에 보이는 범위(SW/NE 모서리)를 그대로 조회 범위로 쓴다.
+// 4개 중 하나라도 없으면 기존 lat/lng/radius 경로로 동작 → 하위호환 유지
+$sw_lat = isset($_GET['sw_lat']) ? floatval($_GET['sw_lat']) : null;
+$sw_lng = isset($_GET['sw_lng']) ? floatval($_GET['sw_lng']) : null;
+$ne_lat = isset($_GET['ne_lat']) ? floatval($_GET['ne_lat']) : null;
+$ne_lng = isset($_GET['ne_lng']) ? floatval($_GET['ne_lng']) : null;
+
 // ── 체험단 신규 파라미터 ─────────────────────────────────────
 // meeting_type 미지정 시 기본값 '일반' → 홈 기존 동작 유지(회귀 0)
 // MapFragment는 일반+체험단을 한 번에 보여줘야 하므로 meeting_type=전체를
@@ -142,9 +150,40 @@ if ($time_filter !== null && $time_filter !== '') {
     $params[':time_filter'] = $time_filter . ':00';
 }
 
-// 위치 필터 (기존 Haversine 그대로)
-$useLocationFilter = ($lat !== null && $lng !== null);
-if ($useLocationFilter) {
+// 위치 필터
+// 1) bbox 모드: 뷰포트 SW/NE 좌표를 직접 BETWEEN으로 사용 (뷰포트 자체가 필터)
+// 2) radius 모드: 기존 중심점 + 반경 Haversine (하위호환 — HomeFragment/구버전 앱)
+$useBboxFilter     = ($sw_lat !== null && $sw_lng !== null && $ne_lat !== null && $ne_lng !== null);
+$useLocationFilter = (!$useBboxFilter && $lat !== null && $lng !== null);
+
+if ($useBboxFilter) {
+    // 좌표가 뒤집혀 오면 교정
+    if ($sw_lat > $ne_lat) { [$sw_lat, $ne_lat] = [$ne_lat, $sw_lat]; }
+    if ($sw_lng > $ne_lng) { [$sw_lng, $ne_lng] = [$ne_lng, $sw_lng]; }
+
+    // 축당 최대 1.0도(약 111km)로 클램프 — 과도한 줌아웃 방어
+    $max_span = 1.0;
+    if (($ne_lat - $sw_lat) > $max_span) {
+        $center = ($sw_lat + $ne_lat) / 2;
+        $sw_lat = $center - $max_span / 2;
+        $ne_lat = $center + $max_span / 2;
+    }
+    if (($ne_lng - $sw_lng) > $max_span) {
+        $center = ($sw_lng + $ne_lng) / 2;
+        $sw_lng = $center - $max_span / 2;
+        $ne_lng = $center + $max_span / 2;
+    }
+
+    $where_conditions[] = "l.map_x IS NOT NULL AND l.map_y IS NOT NULL";
+    $where_conditions[] = "l.map_x != '' AND l.map_y != ''";
+    $where_conditions[] = "CAST(l.map_y AS DECIMAL(10,7)) BETWEEN :bbox_sw AND :bbox_ne";
+    $where_conditions[] = "CAST(l.map_x AS DECIMAL(10,7)) BETWEEN :bbox_w AND :bbox_e";
+
+    $params[':bbox_sw'] = $sw_lat;
+    $params[':bbox_ne'] = $ne_lat;
+    $params[':bbox_w']  = $sw_lng;
+    $params[':bbox_e']  = $ne_lng;
+} elseif ($useLocationFilter) {
     $bbox_offset  = $radius / 111.0;
     $bbox_sw      = $lat - $bbox_offset;
     $bbox_ne      = $lat + $bbox_offset;
@@ -166,27 +205,40 @@ $where_clause = !empty($where_conditions)
     ? 'WHERE ' . implode(' AND ', $where_conditions)
     : '';
 
-// ── Haversine SELECT / HAVING (기존 그대로) ──────────────────
+// ── Haversine SELECT / HAVING ────────────────────────────────
+// bbox 모드는 뷰포트 자체가 필터라서 HAVING 없이 distance_km만 계산한다
+// (거리 정렬용). 거리 기준점은 lat/lng가 오면 그 값, 없으면 bbox 중심.
 $distance_select = '';
 $having_clause   = '';
 
-if ($useLocationFilter) {
+// 거리 파라미터(:h_*)가 섞이기 전 WHERE 전용 스냅샷
+// (HAVING이 없는 COUNT 쿼리에 미사용 파라미터가 바인딩되면 PDO 오류)
+$where_params = $params;
+
+if ($useBboxFilter || $useLocationFilter) {
+    $center_lat = ($lat !== null) ? $lat : ($sw_lat + $ne_lat) / 2;
+    $center_lng = ($lng !== null) ? $lng : ($sw_lng + $ne_lng) / 2;
+
     $distance_select = ",
     (6371 * ACOS(LEAST(1.0,
         COS(RADIANS(:h_lat)) * COS(RADIANS(CAST(l.map_y AS DECIMAL(10,7)))) *
         COS(RADIANS(CAST(l.map_x AS DECIMAL(10,7))) - RADIANS(:h_lng)) +
         SIN(RADIANS(:h_lat)) * SIN(RADIANS(CAST(l.map_y AS DECIMAL(10,7))))
     ))) AS distance_km";
-    $having_clause = "HAVING distance_km <= :h_radius";
-    $params[':h_lat']    = $lat;
-    $params[':h_lng']    = $lng;
-    $params[':h_radius'] = $radius;
+    $params[':h_lat'] = $center_lat;
+    $params[':h_lng'] = $center_lng;
+
+    if ($useLocationFilter) {
+        // radius 모드만 거리로 잘라낸다
+        $having_clause = "HAVING distance_km <= :h_radius";
+        $params[':h_radius'] = $radius;
+    }
 } else {
     $distance_select = ", NULL AS distance_km";
 }
 
 // ── 정렬 (기존 + 체험단 마감임박순 추가) ────────────────────
-if ($order_by === 'distance' && $useLocationFilter) {
+if ($order_by === 'distance' && ($useLocationFilter || $useBboxFilter)) {
     $order_clause = "ORDER BY distance_km ASC";
 } elseif ($order_by === 'deadline' && $meeting_type === '체험단') {
     $order_clause = "ORDER BY m.campaign_deadline ASC";
@@ -223,8 +275,11 @@ try {
         ";
     }
 
+    // radius 모드 COUNT는 Haversine 서브쿼리(:h_* 사용), 그 외에는 WHERE만 사용
+    $count_bind_params = $useLocationFilter ? $params : $where_params;
+
     $count_stmt = $db->prepare($count_query);
-    foreach ($params as $key => $value) {
+    foreach ($count_bind_params as $key => $value) {
         $count_stmt->bindValue($key, $value);
     }
     $count_stmt->execute();

@@ -15,6 +15,15 @@ if (empty($input['email']) || empty($input['code'])) {
 $email = trim($input['email']);
 $code = trim($input['code']);
 
+// 용도 구분 (선택 입력, 기본 'signup') — 재설정용 코드로 가입 인증을 통과할 수 없게 분리
+$purpose = isset($input['purpose']) && trim($input['purpose']) !== ''
+    ? trim($input['purpose'])
+    : 'signup';
+
+if (!in_array($purpose, ['signup', 'password_reset'])) {
+    sendError('purpose는 signup, password_reset 중 하나여야 합니다');
+}
+
 // DB 연결
 $database = new Database();
 $db = $database->getConnection();
@@ -25,17 +34,19 @@ if ($db === null) {
 }
 
 try {
-    $query = "SELECT * FROM email_verifications 
-              WHERE email = :email 
-              AND code = :code 
-              AND is_verified = FALSE 
+    $query = "SELECT * FROM email_verifications
+              WHERE email = :email
+              AND code = :code
+              AND purpose = :purpose
+              AND is_verified = FALSE
               AND expires_at > NOW()
-              ORDER BY created_at DESC 
+              ORDER BY created_at DESC
               LIMIT 1";
-    
+
     $stmt = $db->prepare($query);
     $stmt->bindParam(':email', $email);
     $stmt->bindParam(':code', $code);
+    $stmt->bindParam(':purpose', $purpose);
     $stmt->execute();
     
     if ($stmt->rowCount() === 0) {

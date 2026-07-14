@@ -65,10 +65,13 @@ try {
 
 
     // 1. 이메일 인증 완료 여부 확인
-    $verify_query = "SELECT * FROM email_verifications 
-                     WHERE email = :email 
-                     AND is_verified = TRUE 
-                     ORDER BY created_at DESC 
+    // purpose='signup' 필수 — 비밀번호 재설정용 인증 행으로 가입 게이트를
+    // 통과하는 우회를 차단한다
+    $verify_query = "SELECT * FROM email_verifications
+                     WHERE email = :email
+                     AND purpose = 'signup'
+                     AND is_verified = TRUE
+                     ORDER BY created_at DESC
                      LIMIT 1";
     $verify_stmt = $db->prepare($verify_query);
     $verify_stmt->bindParam(':email', $email);

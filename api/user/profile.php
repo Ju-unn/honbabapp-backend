@@ -29,21 +29,26 @@ if ($db === null) {
 }
 
 try {
+    // social_provider: 소셜 로그인 계정이면 'kakao'/'google', 일반 계정이면 NULL
+    // (앱이 계정 관리 화면에서 비밀번호 변경 메뉴 노출 여부를 결정하는 데 사용)
     $query = "SELECT
-                user_id,
-                user_nickname,
-                user_profile_image,
-                user_status_message,
-                user_manner_score,
-                user_participation_count,
-                user_email,
-                user_birthday,
-                user_gender,
-                push_enabled,
-                user_instagram_id,
-                user_blog_id
-              FROM users
-              WHERE user_id = :user_id";
+                u.user_id,
+                u.user_nickname,
+                u.user_profile_image,
+                u.user_status_message,
+                u.user_manner_score,
+                u.user_participation_count,
+                u.user_email,
+                u.user_birthday,
+                u.user_gender,
+                u.push_enabled,
+                u.user_instagram_id,
+                u.user_blog_id,
+                sa.provider AS social_provider
+              FROM users u
+              LEFT JOIN social_accounts sa ON sa.user_id = u.user_id
+              WHERE u.user_id = :user_id
+              LIMIT 1";
 
     $stmt = $db->prepare($query);
     $stmt->bindParam(':user_id', $user_id, PDO::PARAM_INT);
@@ -63,6 +68,7 @@ try {
     // SNS ID null 처리 (없으면 빈 문자열 대신 null 유지)
     $user['user_instagram_id'] = $user['user_instagram_id'] ?? null;
     $user['user_blog_id']      = $user['user_blog_id'] ?? null;
+    $user['social_provider']   = $user['social_provider'] ?? null;
 
     sendSuccess('프로필 조회 성공', $user);
 

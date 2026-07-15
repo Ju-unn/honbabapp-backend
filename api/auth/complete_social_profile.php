@@ -2,6 +2,7 @@
 require_once '../config/database.php';
 require_once '../utils/response.php';
 require_once '../utils/jwt.php';
+require_once '../utils/validation.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -37,6 +38,11 @@ if ($nickname !== null && (mb_strlen($nickname) < 2 || mb_strlen($nickname) > 10
 $allowed_genders = ['남성', '여성', '기타'];
 if ($gender !== null && !in_array($gender, $allowed_genders)) {
     sendError('성별 값이 올바르지 않습니다');
+}
+
+// 생년월일 검증 (만 10세 이상)
+if ($birthday !== null && !isValidBirthday($birthday)) {
+    sendError('만 10세 미만은 가입할 수 없습니다');
 }
 
 try {

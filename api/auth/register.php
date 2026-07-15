@@ -2,6 +2,7 @@
 
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/validation.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -61,6 +62,11 @@ try {
         if (empty($gender)) {
             sendError("gender 필드는 필수입니다");
         }
+    }
+
+    // birthday가 있으면(복원 포함) 만 10세 이상인지 검증
+    if ($birthday !== null && !isValidBirthday($birthday)) {
+        sendError("만 10세 미만은 가입할 수 없습니다");
     }
 
 

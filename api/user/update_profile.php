@@ -11,7 +11,8 @@
  require_once '../config/database.php';
  require_once '../utils/response.php';
  require_once '../utils/jwt.php';
- 
+ require_once '../utils/validation.php';
+
  if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
      sendError('POST 요청만 허용됩니다', 405);
  }
@@ -37,6 +38,11 @@ if ($user_blog_id === '')      $user_blog_id = null;
 if ($user_nickname !== null) {
     if (mb_strlen($user_nickname) < 2 || mb_strlen($user_nickname) > 10) {
         sendError('닉네임은 2~10자 이내로 입력해주세요');
+    }
+
+    $nickname_format_error = getNicknameFormatError($user_nickname);
+    if ($nickname_format_error !== null) {
+        sendError($nickname_format_error);
     }
 }
 

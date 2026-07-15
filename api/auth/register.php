@@ -24,6 +24,13 @@ $email        = trim($input['email']);
 $password     = $input['password'];
 $phone_number = trim($input['phone_number']);
 $location     = trim($input['location']);
+
+// 닉네임 형식 검증 (한글/영문/숫자만, 숫자로만 구성 금지)
+$nickname_format_error = getNicknameFormatError($nickname);
+if ($nickname_format_error !== null) {
+    sendError($nickname_format_error);
+}
+
 // 빈 문자열은 null로 취급 — 복원 가입 시 앱이 숨긴 필드를 ""로 보내는데,
 // 이대로 UPDATE하면 user_birthday = '' 가 되어 날짜 형식 오류(SQLSTATE 22007)가 남
 $birthday     = isset($input['birthday']) && trim($input['birthday']) !== '' ? trim($input['birthday']) : null;

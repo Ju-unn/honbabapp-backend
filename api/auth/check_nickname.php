@@ -1,6 +1,7 @@
 <?php
 require_once '../config/database.php';
 require_once '../utils/response.php';
+require_once '../utils/validation.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendError('GET 요청만 허용됩니다', 405);
@@ -15,6 +16,12 @@ $nickname = trim($_GET['nickname']);
 // 닉네임 길이 검증
 if (mb_strlen($nickname) < 2 || mb_strlen($nickname) > 10) {
     sendError('닉네임은 2-10자 이내로 입력해주세요');
+}
+
+// 닉네임 형식 검증 (한글/영문/숫자만, 숫자로만 구성 금지)
+$nickname_format_error = getNicknameFormatError($nickname);
+if ($nickname_format_error !== null) {
+    sendError($nickname_format_error);
 }
 
 // DB 연결

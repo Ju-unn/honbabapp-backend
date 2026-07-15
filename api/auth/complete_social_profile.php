@@ -34,6 +34,14 @@ if ($nickname !== null && (mb_strlen($nickname) < 2 || mb_strlen($nickname) > 10
     sendError('닉네임은 2-10자 이내로 입력해주세요');
 }
 
+// 닉네임 형식 검증 (한글/영문/숫자만, 숫자로만 구성 금지)
+if ($nickname !== null) {
+    $nickname_format_error = getNicknameFormatError($nickname);
+    if ($nickname_format_error !== null) {
+        sendError($nickname_format_error);
+    }
+}
+
 // 성별 값 검증 (DB enum과 일치해야 함)
 $allowed_genders = ['남성', '여성', '기타'];
 if ($gender !== null && !in_array($gender, $allowed_genders)) {

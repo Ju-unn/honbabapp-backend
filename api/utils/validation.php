@@ -24,4 +24,18 @@ function isValidBirthday($birthday) {
 
     return true;
 }
+
+// 닉네임 형식을 검증한다. 문제가 없으면 null, 있으면 에러 메시지를 반환한다.
+// 앱의 checkNicknameDuplicate()와 동일한 규칙 — API 직접 호출로 우회하는 것을 막는다.
+function getNicknameFormatError($nickname) {
+    if (!preg_match('/^[가-힣a-zA-Z0-9]+$/u', $nickname)) {
+        return '특수문자는 사용할 수 없습니다';
+    }
+
+    if (preg_match('/^[0-9]+$/', $nickname)) {
+        return '닉네임은 숫자로만 만들 수 없습니다';
+    }
+
+    return null;
+}
 ?>

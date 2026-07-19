@@ -83,6 +83,12 @@ try {
     ");
     $stmt->execute([$room_id, $target_user_id]);
 
+    // 초대 후 총 멤버 수 (member_joined 이벤트의 remaining 필드용 —
+    // 클라이언트가 blind increment 대신 이 값으로 절대치를 세팅하게 함)
+    $stmt = $db->prepare("SELECT COUNT(*) FROM chat_room_members WHERE room_id = ?");
+    $stmt->execute([$room_id]);
+    $remaining = intval($stmt->fetchColumn());
+
     // 시스템 메시지 INSERT
     $system_msg = $target_user['nickname'] . '님이 초대되었습니다.';
     $stmt = $db->prepare("
@@ -130,9 +136,10 @@ try {
     
     // 2) 방의 기존 멤버들에게 member_joined
     emit_to_room($room_id, 'member_joined', [
-        'room_id'  => $room_id,
-        'user_id'  => $target_user_id,
-        'nickname' => $target_user['nickname']
+        'room_id'   => $room_id,
+        'user_id'   => $target_user_id,
+        'nickname'  => $target_user['nickname'],
+        'remaining' => $remaining,
     ]);
     
     // 3) 시스템 메시지를 message 이벤트로 broadcast

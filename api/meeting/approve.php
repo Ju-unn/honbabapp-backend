@@ -232,6 +232,14 @@ try {
             '참여 신청이 거절되었어요', ['meeting_id' => $participant['meeting_id']]);
     }
 
+    // ── 참여 상태 실시간 반영 (일반+체험단, 승인/거절 공통) ──
+    // 신청자가 상세 화면을 열어둔 상태에서도 버튼("승인 대기 중" 등)이
+    // 즉시 갱신되도록 user_{id} 채널로 상태 변경 이벤트를 보낸다.
+    emit_to_user($approved_uid, 'participation_updated', [
+        'meeting_id' => (int)$meeting_id_val,
+        'status'     => $new_status,
+    ]);
+
     // ── WebSocket emit (일반 모임만, 기존 그대로) ────────────
     if ($action === 'approve' && $meeting_type === '일반' && $room_id && $room_name) {
         if ($new_room_created) {

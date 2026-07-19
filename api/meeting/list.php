@@ -128,14 +128,25 @@ if ($categories && count($categories) > 0) {
 }
 
 // 체험단 채널 필터
-// 채널 필터가 걸리면 meeting_type 값과 무관하게 항상
-// "campaign_channels LIKE '%값%'" 조건만 적용한다.
+// channels는 "블로그,인스타그램"처럼 콤마 구분 다중값으로 올 수 있다.
+// 값별로 LIKE 조건을 만들어 OR로 묶는다 → 선택한 채널 중 하나라도
+// 포함된 체험단이 매칭된다 (통째로 LIKE하면 전부+같은 순서일 때만 매칭됨).
 // campaign_channels는 일반 모임에서 항상 NULL이므로, 이 조건이 걸리는
 // 순간 일반 모임은 자동으로 결과에서 제외된다(의도된 동작 — 사용자가
 // 특정 홍보 채널을 선택했다면 그 채널을 쓰는 체험단만 보고 싶은 것).
 if ($channels_filter !== null && $channels_filter !== '') {
-    $where_conditions[] = "m.campaign_channels LIKE :channels_filter";
-    $params[':channels_filter'] = '%' . $channels_filter . '%';
+    $channel_list = array_values(array_filter(
+        array_map('trim', explode(',', $channels_filter)),
+        fn($c) => $c !== ''
+    ));
+    if (count($channel_list) > 0) {
+        $channel_conditions = [];
+        foreach ($channel_list as $i => $channel) {
+            $channel_conditions[] = "m.campaign_channels LIKE :channel{$i}";
+            $params[":channel{$i}"] = '%' . $channel . '%';
+        }
+        $where_conditions[] = '(' . implode(' OR ', $channel_conditions) . ')';
+    }
 }
 
 // 날짜 필터 (meeting_date의 날짜 부분만 비교)

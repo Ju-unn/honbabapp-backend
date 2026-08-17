@@ -198,11 +198,13 @@ try {
                               user_email = COALESCE(:email, user_email),
                               user_email_verified = CASE WHEN :email2 IS NULL
                                                          THEN user_email_verified ELSE 1 END,
+                              user_profile_image = COALESCE(user_profile_image, :profile_image),
                               user_updated_at = NOW()
                           WHERE user_id = :user_id";
         $restore_stmt = $db->prepare($restore_query);
         $restore_stmt->bindParam(':email', $restore_email);
         $restore_stmt->bindParam(':email2', $restore_email);
+        $restore_stmt->bindParam(':profile_image', $social_profile_image);
         $restore_stmt->bindParam(':user_id', $user['user_id'], PDO::PARAM_INT);
         $restore_stmt->execute();
 

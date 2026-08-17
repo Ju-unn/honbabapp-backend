@@ -96,9 +96,12 @@ if ($meeting_max_participants < 2 || $meeting_max_participants > 10) {
     sendError('최대 참여 인원은 2-10명 사이로 설정해주세요');
 }
 
+// 날짜 형식만 여기서 검증하고, "현재 시간 이후" 검증은 DB의 만료 검사 뒤로 미룬다
+// (만료된 모임을 과거 날짜 그대로 수정 시도하면 날짜 문구가 아니라
+//  "이미 종료된 모임" 문구가 떠야 원인이 명확함)
 $meeting_datetime = strtotime($meeting_date);
-if ($meeting_datetime === false || $meeting_datetime < time()) {
-    sendError('모임 날짜는 현재 시간 이후로 설정해주세요');
+if ($meeting_datetime === false) {
+    sendError('모임 날짜 형식이 올바르지 않습니다');
 }
 
 // DB 연결
@@ -111,11 +114,14 @@ if ($db === null) {
 
 try {
     // 모임 조회 + 호스트 검증 + 현재 참여자 수 확인
-    $stmt_check = $db->prepare("SELECT meeting_current_participants
-                                 FROM meetings 
-                                 WHERE meeting_id = :meeting_id 
-                                 AND meeting_host_id = :host_id
-                                 AND meeting_date > NOW()");
+    // 만료 여부는 조회 조건에 넣지 않고 따로 검사한다
+    // (조건에 섞으면 만료된 모임도 "찾을 수 없거나 권한 없음"으로 뭉뚱그려져 원인을 알 수 없음)
+    $stmt_check = $db->prepare("SELECT meeting_current_participants,
+                                        meeting_status,
+                                        (meeting_date <= NOW()) AS is_expired
+                                 FROM meetings
+                                 WHERE meeting_id = :meeting_id
+                                 AND meeting_host_id = :host_id");
     $stmt_check->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
     $stmt_check->bindParam(':host_id', $host_id, PDO::PARAM_INT);
     $stmt_check->execute();
@@ -125,6 +131,15 @@ try {
     }
 
     $meeting = $stmt_check->fetch(PDO::FETCH_ASSOC);
+
+    if (intval($meeting['is_expired']) === 1) {
+        sendError('이미 종료된 모임이라 수정할 수 없습니다');
+    }
+
+    // 만료 검사를 통과한 뒤에만 새 날짜의 미래 여부를 검증
+    if ($meeting_datetime < time()) {
+        sendError('모임 날짜는 현재 시간 이후로 설정해주세요');
+    }
 
     // 최대 참여 인원이 현재 참여자 수보다 작으면 안 됨
     // 예: 이미 3명이 있는데 최대를 2명으로 줄이면 안 됨
@@ -232,6 +247,40 @@ try {
     $stmt_meeting->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
     $stmt_meeting->bindParam(':host_id', $host_id, PDO::PARAM_INT);
     $stmt_meeting->execute();
+
+    // 3-1. 그룹 채팅방 동기화
+    //      room_name/room_image는 채팅방 생성 시점(approve.php)에 모임 제목/이미지를
+    //      복사해 넣은 값이라, 모임 수정 시 함께 갱신하지 않으면 옛날 값이 계속 남는다.
+    //      이미지는 새 값이 있을 때만 덮어쓴다 (null로 기존 이미지를 지우지 않음)
+    $stmt_room = $db->prepare("
+        UPDATE chat_rooms
+        SET room_name  = :room_name,
+            room_image = COALESCE(:room_image, room_image)
+        WHERE meeting_id = :meeting_id
+          AND room_type  = 'group'
+    ");
+    $stmt_room->execute([
+        ':room_name'  => $meeting_title,
+        ':room_image' => $meeting_image,
+        ':meeting_id' => $meeting_id,
+    ]);
+
+    // 4. 정원 변경에 따른 모집 상태 재계산
+    //    - 모집완료였는데 최대인원을 늘려 자리가 생기면 → 모집중 복귀
+    //      (approve.php가 정원 도달 시 모집완료로 바꾸는 것의 역방향)
+    //    - 모집중인데 최대인원을 현재 인원까지 줄이면 → 모집완료
+    //    취소 등 다른 상태는 건드리지 않는다
+    $current_participants = intval($meeting['meeting_current_participants']);
+
+    if ($meeting['meeting_status'] === '모집완료'
+        && $meeting_max_participants > $current_participants) {
+        $db->prepare("UPDATE meetings SET meeting_status = '모집중' WHERE meeting_id = :meeting_id")
+           ->execute([':meeting_id' => $meeting_id]);
+    } elseif ($meeting['meeting_status'] === '모집중'
+        && $meeting_max_participants <= $current_participants) {
+        $db->prepare("UPDATE meetings SET meeting_status = '모집완료' WHERE meeting_id = :meeting_id")
+           ->execute([':meeting_id' => $meeting_id]);
+    }
 
     $db->commit();
     sendSuccess('모임이 수정되었습니다', [

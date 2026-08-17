@@ -128,6 +128,12 @@ try {
     $approved_uid     = $participant['user_id'];
     $meeting_id_val   = $participant['meeting_id'];
 
+    // "OO님이 초대되었습니다" 시스템 메시지 실시간 broadcast용
+    // (kick.php처럼 message 이벤트로 쏴야 ChatFragment 목록의 last_message가 즉시 갱신됨)
+    $invite_msg_id         = null;
+    $invite_msg_content    = null;
+    $invite_msg_created_at = null;
+
     if ($action === 'approve' && $meeting_type === '일반') {
         // 일반 모임만 그룹 채팅방 자동생성 (기존 로직 그대로)
         $nick_stmt = $db->prepare("SELECT user_nickname FROM users WHERE user_id = :uid");
@@ -177,17 +183,19 @@ try {
                 $add_member_stmt->execute([':rid' => $room_id, ':uid' => $member_uid]);
             }
 
-            // 시스템 메시지 2개
-            foreach (['채팅방이 생성되었습니다.', $approved_nickname . '님이 초대되었습니다.'] as $sys_msg) {
+            // 시스템 메시지 2개 (마지막 초대 메시지 id는 broadcast용으로 보관)
+            $invite_msg_content = $approved_nickname . '님이 초대되었습니다.';
+            foreach (['채팅방이 생성되었습니다.', $invite_msg_content] as $sys_msg) {
                 $db->prepare(
                     "INSERT INTO chat_messages (room_id, sender_id, msg_type, content, created_at)
                      VALUES (:rid, NULL, 'system', :content, NOW())"
                 )->execute([':rid' => $room_id, ':content' => $sys_msg]);
+                $invite_msg_id = (int)$db->lastInsertId();
             }
 
             $db->prepare(
                 "UPDATE chat_rooms SET last_message = :lm, last_msg_time = NOW() WHERE room_id = :rid"
-            )->execute([':lm' => $approved_nickname . '님이 초대되었습니다.', ':rid' => $room_id]);
+            )->execute([':lm' => $invite_msg_content, ':rid' => $room_id]);
 
         } else {
             // CASE B: 채팅방 있음 → 멤버만 추가
@@ -205,18 +213,27 @@ try {
                      VALUES (:rid, :uid, NOW(), NOW())"
                 )->execute([':rid' => $room_id, ':uid' => $approved_uid]);
 
-                $sys3 = $approved_nickname . '님이 초대되었습니다.';
+                $invite_msg_content = $approved_nickname . '님이 초대되었습니다.';
                 $db->prepare(
                     "INSERT INTO chat_messages (room_id, sender_id, msg_type, content, created_at)
                      VALUES (:rid, NULL, 'system', :content, NOW())"
-                )->execute([':rid' => $room_id, ':content' => $sys3]);
+                )->execute([':rid' => $room_id, ':content' => $invite_msg_content]);
+                $invite_msg_id = (int)$db->lastInsertId();
 
                 $db->prepare(
                     "UPDATE chat_rooms SET last_message = :lm, last_msg_time = NOW() WHERE room_id = :rid"
-                )->execute([':lm' => $sys3, ':rid' => $room_id]);
+                )->execute([':lm' => $invite_msg_content, ':rid' => $room_id]);
 
                 $member_added = true;
             }
+        }
+
+        // broadcast용 초대 메시지 created_at 조회
+        if ($invite_msg_id) {
+            $msg_time_stmt = $db->prepare("SELECT created_at FROM chat_messages WHERE message_id = :mid");
+            $msg_time_stmt->execute([':mid' => $invite_msg_id]);
+            $msg_time_row = $msg_time_stmt->fetch(PDO::FETCH_ASSOC);
+            $invite_msg_created_at = $msg_time_row ? $msg_time_row['created_at'] : date('Y-m-d H:i:s');
         }
     }
     // 체험단(meeting_type === '체험단')이면 위 블록 전체 스킵
@@ -240,10 +257,17 @@ try {
         'status'     => $new_status,
     ]);
 
-    // ── WebSocket emit (일반 모임만, 기존 그대로) ────────────
+    // ── WebSocket emit (일반 모임만) ─────────────────────────
     if ($action === 'approve' && $meeting_type === '일반' && $room_id && $room_name) {
         if ($new_room_created) {
             emit_to_user($approved_uid, 'room_joined', [
+                'room_id'   => $room_id,
+                'room_type' => 'group',
+                'room_name' => $room_name
+            ]);
+            // 호스트에게도 통보 — 새 방은 message 이벤트만으로는 목록에 추가되지
+            // 않으므로(ChatFragment는 아는 방의 last_message만 갱신) 목록 재조회 유도
+            emit_to_user($host_id, 'room_joined', [
                 'room_id'   => $room_id,
                 'room_type' => 'group',
                 'room_name' => $room_name
@@ -258,6 +282,20 @@ try {
                 'room_id'  => $room_id,
                 'user_id'  => $approved_uid,
                 'nickname' => $approved_nickname ?? '참여자'
+            ]);
+        }
+
+        // "OO님이 초대되었습니다" 시스템 메시지를 message 이벤트로 broadcast
+        // (kick.php의 강퇴 메시지와 동일 패턴 — 열려있는 채팅 목록의
+        //  last_message와 채팅방 화면에 실시간 반영됨)
+        if ($invite_msg_id) {
+            emit_to_room($room_id, 'message', [
+                'room_id'    => $room_id,
+                'message_id' => $invite_msg_id,
+                'msg_type'   => 'system',
+                'sender_id'  => null,
+                'content'    => $invite_msg_content,
+                'created_at' => $invite_msg_created_at,
             ]);
         }
     }

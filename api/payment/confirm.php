@@ -57,7 +57,10 @@ try {
         sendError('본인의 주문이 아닙니다', 403);
     }
 
-    if ($payment_record['status'] !== 'READY') {
+    // READY(최초 시도) 또는 FAILED(이전 confirm 실패 후 재시도)만 진행 허용.
+    // DONE(이미 승인 완료)인 주문만 막아서, confirm 실패 시에도 같은 order_id로
+    // 토스 재승인을 다시 시도할 수 있게 한다.
+    if ($payment_record['status'] === 'DONE') {
         $database->rollBack();
         sendError('이미 처리된 주문입니다');
     }

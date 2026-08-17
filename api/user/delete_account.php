@@ -19,6 +19,44 @@ if ($db === null) {
 }
 
 try {
+    // ── 탈퇴 가능 여부 확인 ───────────────────────
+    // 진행 중(모집중/모집완료 + 날짜 미도래)인 모임/체험단에
+    // 호스트이거나 승인된 참여자로 걸려 있으면 탈퇴 불가.
+    // S3 삭제는 되돌릴 수 없으므로 반드시 그보다 먼저 체크한다.
+    // (대기 중인 신청은 아래 정리 로직이 자동 취소하므로 차단 대상 아님)
+    $active_check_stmt = $db->prepare("
+        SELECT
+            SUM(CASE WHEN m.meeting_type = '체험단' THEN 1 ELSE 0 END) AS active_campaigns,
+            SUM(CASE WHEN m.meeting_type != '체험단' THEN 1 ELSE 0 END) AS active_meetings
+        FROM meetings m
+        LEFT JOIN meeting_participants mp
+            ON mp.meeting_id = m.meeting_id
+            AND mp.user_id = :user_id
+            AND mp.participation_status = '승인'
+        WHERE (m.meeting_host_id = :user_id2 OR mp.user_id IS NOT NULL)
+            AND m.meeting_status IN ('모집중', '모집완료')
+            AND m.meeting_date > NOW()
+    ");
+    $active_check_stmt->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+    $active_check_stmt->bindParam(':user_id2', $user_id, PDO::PARAM_INT);
+    $active_check_stmt->execute();
+    $active_counts = $active_check_stmt->fetch(PDO::FETCH_ASSOC);
+
+    $active_meeting_count = intval($active_counts['active_meetings'] ?? 0);
+    $active_campaign_count = intval($active_counts['active_campaigns'] ?? 0);
+
+    if ($active_meeting_count > 0 || $active_campaign_count > 0) {
+        $blocking_items = [];
+        if ($active_meeting_count > 0) {
+            $blocking_items[] = '모임 ' . $active_meeting_count . '건';
+        }
+        if ($active_campaign_count > 0) {
+            $blocking_items[] = '체험단 ' . $active_campaign_count . '건';
+        }
+        sendError('진행 중인 ' . implode(', ', $blocking_items)
+            . '이(가) 있어 탈퇴할 수 없습니다. 모임 나가기 또는 삭제 후 다시 시도해주세요.');
+    }
+
     // ── 트랜잭션 밖 ──────────────────────────────
     // 프로필 이미지 URL 조회 → S3 삭제
     // 트랜잭션 밖에서 하는 이유:

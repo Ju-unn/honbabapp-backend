@@ -266,6 +266,14 @@ try {
         'target_user_id' => $target_user_id,
     ]);
 
+    // 12-3) 참여 상태 실시간 반영 (approve.php와 동일한 이벤트)
+    //       강퇴 당사자가 모임 상세 화면을 열어둔 상태라면
+    //       버튼이 즉시 "강퇴로 인해 재신청 불가입니다"로 갱신됨
+    emit_to_user($target_user_id, 'participation_updated', [
+        'meeting_id' => (int)$meeting_id,
+        'status'     => '강퇴',
+    ]);
+
     // ───────────────────────────────────────
     // 13) 응답 반환
     // ───────────────────────────────────────

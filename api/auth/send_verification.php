@@ -58,8 +58,8 @@ try {
     $delete_stmt->bindParam(':email', $email);
     $delete_stmt->execute();
 
-    // 새 인증 코드 저장 — 만료시각(5분)은 verify_code.php의 NOW() 비교와 같은 DB 시계로 계산
-    $insert_query = "INSERT INTO email_verifications (email, code, purpose, expires_at) VALUES (:email, :code, 'signup', DATE_ADD(NOW(), INTERVAL 5 MINUTE))";
+    // 새 인증 코드 저장 — 만료시각(3분)은 verify_code.php의 NOW() 비교와 같은 DB 시계로 계산
+    $insert_query = "INSERT INTO email_verifications (email, code, purpose, expires_at) VALUES (:email, :code, 'signup', DATE_ADD(NOW(), INTERVAL 3 MINUTE))";
     $insert_stmt = $db->prepare($insert_query);
     $insert_stmt->bindParam(':email', $email);
     $insert_stmt->bindParam(':code', $code);

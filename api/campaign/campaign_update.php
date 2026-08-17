@@ -131,7 +131,8 @@ try {
     // ── 1. 모임 조회 + 호스트 권한 확인 + 체험단 여부 확인 ────
     //     (14일 제한의 기준점인 meeting_created_at도 함께 조회)
     $stmt_check = $db->prepare("
-        SELECT meeting_current_participants, meeting_type, meeting_created_at
+        SELECT meeting_current_participants, meeting_status, meeting_type, meeting_created_at,
+               (meeting_date <= NOW()) AS is_expired
         FROM meetings
         WHERE meeting_id    = :meeting_id
           AND meeting_host_id = :host_id
@@ -149,6 +150,12 @@ try {
     // 체험단이 아닌 모임으로 수정 시도 방어
     if ($meeting_row['meeting_type'] !== '체험단') {
         sendError('체험단만 이 API로 수정할 수 있습니다');
+    }
+
+    // 마감일(meeting_date = campaign_deadline)이 지난 체험단은 수정 불가
+    // (meeting/update.php의 만료 차단과 동일한 정책)
+    if (intval($meeting_row['is_expired']) === 1) {
+        sendError('이미 종료된 체험단이라 수정할 수 없습니다');
     }
 
     // 최대 인원이 현재 참여자 수보다 작으면 안 됨
@@ -294,6 +301,22 @@ try {
     $stmt_meeting->bindParam(':meeting_id',           $meeting_id, PDO::PARAM_INT);
     $stmt_meeting->bindParam(':host_id',              $host_id,    PDO::PARAM_INT);
     $stmt_meeting->execute();
+
+    // ── 4. 정원 변경에 따른 모집 상태 재계산 (meeting/update.php와 동일) ──
+    //    - 모집완료였는데 최대인원을 늘려 자리가 생기면 → 모집중 복귀
+    //    - 모집중인데 최대인원을 현재 인원까지 줄이면 → 모집완료
+    //    취소 등 다른 상태는 건드리지 않는다
+    $current_participants = intval($meeting_row['meeting_current_participants']);
+
+    if ($meeting_row['meeting_status'] === '모집완료'
+        && $meeting_max_participants > $current_participants) {
+        $db->prepare("UPDATE meetings SET meeting_status = '모집중' WHERE meeting_id = :meeting_id")
+           ->execute([':meeting_id' => $meeting_id]);
+    } elseif ($meeting_row['meeting_status'] === '모집중'
+        && $meeting_max_participants <= $current_participants) {
+        $db->prepare("UPDATE meetings SET meeting_status = '모집완료' WHERE meeting_id = :meeting_id")
+           ->execute([':meeting_id' => $meeting_id]);
+    }
 
     $db->commit();
 

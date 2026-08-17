@@ -1,21 +1,19 @@
 <?php
 /**
- * 임시 비밀번호 발급 API
- * POST /api/auth/reset_password.php
+ * 비밀번호 재설정 - 새 비밀번호 직접 설정 API
+ * POST /api/auth/set_new_password.php
  *
- * 입력: { "email": "user@example.com", "code": "123456" }
+ * 입력: { "email": "user@example.com", "code": "123456", "new_password": "abcd1234" }
  *
  * 흐름:
- * 1) purpose='password_reset' 인증코드 검증 (is_verified는 절대 세우지 않음 —
- *    register.php의 가입 게이트와 완전 분리, 검증 즉시 행 삭제로 1회용 보장)
- * 2) 10자 영숫자 임시 비밀번호 생성 (change_password.php의 8자 이상 규칙 충족)
- * 3) bcrypt 해시로 비밀번호 교체 + 인증 행 삭제 (트랜잭션)
- * 4) 임시 비밀번호는 메일로만 발송 — JSON 응답에 절대 포함하지 않음
- *    메일 발송 실패 시 트랜잭션 롤백 → 기존 비밀번호 유지 (락아웃 방지)
+ * 1) purpose='password_reset' 인증코드 검증 (send_password_reset.php가 발급한 코드, 만료 전만)
+ * 2) 새 비밀번호를 bcrypt 해시로 저장
+ * 3) 인증 행 삭제 — 1회용 보장
+ *
+ * reset_password.php(임시 비밀번호 메일 발송 방식)를 대체한다.
  */
 require_once '../config/database.php';
 require_once '../utils/response.php';
-require_once '../utils/mailer.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -23,12 +21,18 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $input = json_decode(file_get_contents('php://input'), true);
 
-if (empty($input['email']) || empty($input['code'])) {
-    sendError('이메일과 인증 코드를 입력해주세요');
+if (empty($input['email']) || empty($input['code']) || empty($input['new_password'])) {
+    sendError('이메일, 인증 코드, 새 비밀번호를 모두 입력해주세요');
 }
 
 $email = trim($input['email']);
 $code = trim($input['code']);
+$new_password = $input['new_password'];
+
+// 새 비밀번호 길이 검증 (change_password.php와 동일 규칙)
+if (mb_strlen($new_password) < 8) {
+    sendError('새 비밀번호는 8자 이상이어야 합니다');
+}
 
 // DB 연결
 $database = new Database();
@@ -38,22 +42,9 @@ if ($db === null) {
     sendError('데이터베이스 연결에 실패했습니다', 500);
 }
 
-/**
- * 10자 영숫자 임시 비밀번호 생성
- * (헷갈리기 쉬운 0/O, 1/l/I 는 제외)
- */
-function generateTempPassword() {
-    $pool = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
-    $password = '';
-    for ($i = 0; $i < 10; $i++) {
-        $password .= $pool[random_int(0, strlen($pool) - 1)];
-    }
-    return $password;
-}
-
 try {
     // 1. 대상 회원 확인 (발송 시와 동일 게이트)
-    $user_query = "SELECT user_id, user_status, user_password FROM users
+    $user_query = "SELECT user_id, user_status FROM users
                    WHERE user_email = :email
                    LIMIT 1";
     $user_stmt = $db->prepare($user_query);
@@ -70,8 +61,7 @@ try {
         sendError('가입되지 않은 이메일입니다');
     }
 
-    // 소셜 로그인 계정 차단 — user_password는 소셜 가입 시에도 임의 해시로
-    // 채워지므로(NOT NULL 제약) social_accounts 존재 여부로 판별해야 한다
+    // 소셜 로그인 계정 차단
     $social_query = "SELECT provider FROM social_accounts WHERE user_id = :user_id LIMIT 1";
     $social_stmt = $db->prepare($social_query);
     $social_stmt->bindParam(':user_id', $user['user_id'], PDO::PARAM_INT);
@@ -106,11 +96,8 @@ try {
 
     $verification = $verify_stmt->fetch(PDO::FETCH_ASSOC);
 
-    // 3. 임시 비밀번호 생성 + 교체 (트랜잭션)
-    $temp_password = generateTempPassword();
-    $hashed_password = password_hash($temp_password, PASSWORD_BCRYPT);
-
-    $db->beginTransaction();
+    // 3. 새 비밀번호로 교체
+    $hashed_password = password_hash($new_password, PASSWORD_BCRYPT);
 
     $update_query = "UPDATE users
                      SET user_password = :password, user_updated_at = NOW()
@@ -126,26 +113,9 @@ try {
     $delete_stmt->bindParam(':id', $verification['verification_id'], PDO::PARAM_INT);
     $delete_stmt->execute();
 
-    // 4. 임시 비밀번호 메일 발송 — 실패 시 롤백 (기존 비밀번호 유지)
-    $mail_sent = sendMail(
-        $email,
-        '[혼밥앱] 임시 비밀번호 안내',
-        buildTempPasswordEmail($temp_password)
-    );
-
-    if (!$mail_sent) {
-        $db->rollBack();
-        sendError('메일 발송에 실패했습니다. 잠시 후 다시 시도해주세요', 500);
-    }
-
-    $db->commit();
-
-    sendSuccess('임시 비밀번호가 이메일로 발송되었습니다. 로그인 후 비밀번호를 변경해주세요');
+    sendSuccess('비밀번호가 변경되었습니다. 새 비밀번호로 로그인해주세요');
 
 } catch(PDOException $e) {
-    if ($db !== null && $db->inTransaction()) {
-        $db->rollBack();
-    }
     sendError('데이터베이스 오류: ' . $e->getMessage(), 500);
 }
 ?>

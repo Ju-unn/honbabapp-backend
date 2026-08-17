@@ -130,7 +130,7 @@ function buildVerificationCodeEmail($code, $purpose = '회원가입') {
     return "
     <div style='max-width:480px;margin:0 auto;padding:24px;font-family:sans-serif;color:#333;'>
         <h2 style='color:#FF6B35;'>혼밥앱</h2>
-        <p>{$purpose} 인증코드입니다. 아래 코드를 5분 안에 입력해주세요.</p>
+        <p>{$purpose} 인증코드입니다. 아래 코드를 3분 안에 입력해주세요.</p>
         <div style='background:#f5f5f5;border-radius:12px;padding:20px;text-align:center;margin:20px 0;'>
             <span style='font-size:32px;font-weight:bold;letter-spacing:8px;'>{$code}</span>
         </div>

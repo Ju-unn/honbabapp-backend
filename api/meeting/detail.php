@@ -99,6 +99,14 @@ try {
         }
     }
 
+    // 대기 중인 신청자 수 (호스트 관리 버튼 배지용)
+    $pending_stmt = $db->prepare(
+        "SELECT COUNT(*) AS cnt FROM meeting_participants
+         WHERE meeting_id = :meeting_id AND participation_status = '대기'"
+    );
+    $pending_stmt->execute([':meeting_id' => $meeting_id]);
+    $pending_applicant_count = (int)$pending_stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
+
     // ── 응답 조립 ────────────────────────────────────────────
     $meeting_data = [
         'meeting_id'                  => (int)$row['meeting_id'],
@@ -141,6 +149,7 @@ try {
         ],
         'participants'           => $participants,
         'my_participation_status' => $my_participation_status,
+        'pending_applicant_count' => $pending_applicant_count,
     ];
 
     sendSuccess('모임 상세 조회 성공', $meeting_data);

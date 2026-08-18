@@ -4,7 +4,7 @@
  * GET /api/user/profile.php?user_id=1
  *
  * 변경사항 (체험단 도입):
- * - SELECT에 user_instagram_id, user_blog_id 추가
+ * - SELECT에 user_instagram_id, user_blog_id, user_youtube_id 추가
  * - 기존 필드 및 응답 구조 하위 호환 유지
  */
 
@@ -49,6 +49,7 @@ try {
                 u.push_enabled,
                 u.user_instagram_id,
                 u.user_blog_id,
+                u.user_youtube_id,
                 u.user_status,
                 sa.provider AS social_provider
               FROM users u
@@ -74,6 +75,7 @@ try {
     // SNS ID null 처리 (없으면 빈 문자열 대신 null 유지)
     $user['user_instagram_id'] = $user['user_instagram_id'] ?? null;
     $user['user_blog_id']      = $user['user_blog_id'] ?? null;
+    $user['user_youtube_id']   = $user['user_youtube_id'] ?? null;
     $user['social_provider']   = $user['social_provider'] ?? null;
 
     // 탈퇴한 사용자 처리:
@@ -85,6 +87,7 @@ try {
         $user['user_status_message'] = null;
         $user['user_instagram_id']   = null;
         $user['user_blog_id']        = null;
+        $user['user_youtube_id']     = null;
         $user['social_provider']     = null;
         $user['user_birthday']       = null;
         $user['user_gender']         = null;

@@ -4,7 +4,7 @@
  * POST /api/user/update_profile.php
  *
  * 변경사항:
- * - user_instagram_id, user_blog_id 중복 검사 추가
+ * - user_instagram_id, user_blog_id, user_youtube_id 중복 검사 추가
  *   (null이면 삭제 의도 → 중복 검사 스킵)
  */
 
@@ -29,10 +29,12 @@ $user_profile_image  = isset($input['user_profile_image'])  ? trim($input['user_
 // ── SNS ID 신규 필드 ─────────────────────────────────────────
 $user_instagram_id = isset($input['user_instagram_id']) ? trim($input['user_instagram_id']) : null;
 $user_blog_id      = isset($input['user_blog_id'])      ? trim($input['user_blog_id'])      : null;
+$user_youtube_id   = isset($input['user_youtube_id'])   ? trim($input['user_youtube_id'])   : null;
 
 // 빈 문자열은 null로 변환 (삭제 의도)
 if ($user_instagram_id === '') $user_instagram_id = null;
 if ($user_blog_id === '')      $user_blog_id = null;
+if ($user_youtube_id === '')   $user_youtube_id = null;
 
 // 닉네임 길이 검증
 if ($user_nickname !== null) {
@@ -52,6 +54,9 @@ if ($user_instagram_id !== null && mb_strlen($user_instagram_id) > 50) {
 }
 if ($user_blog_id !== null && mb_strlen($user_blog_id) > 50) {
     sendError('블로그 ID는 50자 이하로 입력해주세요');
+}
+if ($user_youtube_id !== null && mb_strlen($user_youtube_id) > 50) {
+    sendError('유튜브 ID는 50자 이하로 입력해주세요');
 }
 
 $database = new Database();
@@ -104,6 +109,19 @@ try {
         }
     }
 
+    if ($user_youtube_id !== null) {
+        $youtube_check = $db->prepare(
+            'SELECT user_id FROM users WHERE user_youtube_id = :youtube_id AND user_id != :user_id'
+        );
+        $youtube_check->bindParam(':youtube_id', $user_youtube_id);
+        $youtube_check->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+        $youtube_check->execute();
+
+        if ($youtube_check->rowCount() > 0) {
+            sendError('이미 다른 계정에서 사용 중인 유튜브 ID입니다.');
+        }
+    }
+
     // ── 동적 UPDATE ───────────────────────────────────────────
     $set_parts = [];
     $params    = [];
@@ -128,6 +146,10 @@ try {
     if (array_key_exists('user_blog_id', $input)) {
         $set_parts[] = "user_blog_id = :blog_id";
         $params[':blog_id'] = $user_blog_id;
+    }
+    if (array_key_exists('user_youtube_id', $input)) {
+        $set_parts[] = "user_youtube_id = :youtube_id";
+        $params[':youtube_id'] = $user_youtube_id;
     }
 
     if (empty($set_parts)) {

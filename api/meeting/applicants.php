@@ -62,7 +62,8 @@ try {
                 u.user_profile_image,
                 u.user_manner_score,
                 u.user_instagram_id,
-                u.user_blog_id
+                u.user_blog_id,
+                u.user_youtube_id
             FROM meeting_participants mp
             JOIN users u ON mp.user_id = u.user_id
             WHERE mp.meeting_id    = :meeting_id

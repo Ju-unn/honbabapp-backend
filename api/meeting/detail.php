@@ -86,16 +86,21 @@ try {
     unset($p);
 
     // 내 참여 상태 (기존 그대로)
+    // + 체험단 노쇼(승인 후 취소) 재신청 차단 여부 — join.php의 재신청 차단과 동일 조건
     $my_participation_status = null;
+    $my_noshow_blocked = false;
     if ($user_id !== null) {
         $my_status_stmt = $db->prepare(
-            "SELECT participation_status FROM meeting_participants
+            "SELECT participation_status, approved_at FROM meeting_participants
              WHERE meeting_id = :meeting_id AND user_id = :user_id"
         );
         $my_status_stmt->execute([':meeting_id' => $meeting_id, ':user_id' => $user_id]);
         $my_status_row = $my_status_stmt->fetch(PDO::FETCH_ASSOC);
         if ($my_status_row) {
             $my_participation_status = $my_status_row['participation_status'];
+            $my_noshow_blocked = ($my_participation_status === '취소')
+                && ($row['meeting_type'] === '체험단')
+                && !empty($my_status_row['approved_at']);
         }
     }
 
@@ -149,6 +154,7 @@ try {
         ],
         'participants'           => $participants,
         'my_participation_status' => $my_participation_status,
+        'my_noshow_blocked'       => $my_noshow_blocked,
         'pending_applicant_count' => $pending_applicant_count,
     ];
 

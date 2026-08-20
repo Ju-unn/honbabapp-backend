@@ -69,6 +69,7 @@ try {
             WHERE mp.meeting_id    = :meeting_id
               AND mp.participation_status = :status
               AND mp.user_id != :host_id
+              AND (:status != '취소' OR mp.approved_at IS NOT NULL)
             ORDER BY mp.applied_at ASC
         ");
     } else {

@@ -99,7 +99,7 @@ try {
 
     // ── 6. 중복 신청 확인 (기존 그대로) ─────────────────────
     $duplicate_stmt = $db->prepare(
-        "SELECT participant_id, participation_status
+        "SELECT participant_id, participation_status, approved_at
          FROM meeting_participants
          WHERE meeting_id = :meeting_id AND user_id = :user_id"
     );
@@ -119,7 +119,12 @@ try {
         } elseif ($existing['participation_status'] === '강퇴') {
             sendError('해당 모임에서 강퇴되어 재신청할 수 없습니다.');
         } elseif ($existing['participation_status'] === '취소') {
-            // 취소 상태 → 기존 레코드 삭제 후 재신청 허용
+            // 체험단 노쇼(승인 후 취소, approved_at IS NOT NULL)는 재신청으로
+            // 기록을 지우고 호스트의 리뷰 대상에서 빠져나가지 못하도록 재신청 자체를 차단.
+            // 대기 중 자진 취소(approved_at NULL)는 기존대로 삭제 후 재신청 허용.
+            if ($meeting_type === '체험단' && !empty($existing['approved_at'])) {
+                sendError('이전에 노쇼(취소) 이력이 있어 이 체험단에는 다시 신청할 수 없습니다.');
+            }
             $db->prepare("DELETE FROM meeting_participants WHERE participant_id = :participant_id")
                ->execute([':participant_id' => $existing['participant_id']]);
         }

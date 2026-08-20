@@ -65,7 +65,11 @@ try {
     // - reviewee_id = :user_id 인 행 전체
     // - 최신순(created_at DESC) 정렬
     // - 익명 방침: reviewer_id 등 작성자 정보는 SELECT 하지 않음
+    // - page/limit이 있을 때만 페이징 적용 (하위호환: 파라미터 없으면 전체 반환)
     // ─────────────────────────────────────────────
+    $page  = isset($_GET['page'])  ? max(1, intval($_GET['page']))  : null;
+    $limit = isset($_GET['limit']) ? max(1, intval($_GET['limit'])) : null;
+
     $review_query = "SELECT
                          review_id,
                          rating,
@@ -74,9 +78,17 @@ try {
                        FROM meeting_reviews
                       WHERE reviewee_id = :user_id
                       ORDER BY created_at DESC";
+    if ($limit !== null) {
+        $review_query .= " LIMIT :limit OFFSET :offset";
+    }
 
     $review_stmt = $db->prepare($review_query);
     $review_stmt->bindParam(':user_id', $target_user_id, PDO::PARAM_INT);
+    if ($limit !== null) {
+        $offset = ($page - 1) * $limit;
+        $review_stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $review_stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+    }
     $review_stmt->execute();
 
     $reviews = [];
@@ -89,9 +101,23 @@ try {
         ];
     }
 
-    sendSuccess('받은 후기 목록 조회 성공', [
-        'reviews' => $reviews,
-    ]);
+    $response = ['reviews' => $reviews];
+
+    if ($limit !== null) {
+        $count_stmt = $db->prepare(
+            "SELECT COUNT(*) FROM meeting_reviews WHERE reviewee_id = :user_id"
+        );
+        $count_stmt->bindParam(':user_id', $target_user_id, PDO::PARAM_INT);
+        $count_stmt->execute();
+        $total_count = intval($count_stmt->fetchColumn());
+
+        $response['page']        = $page;
+        $response['limit']       = $limit;
+        $response['total_count'] = $total_count;
+        $response['has_more']    = ($page * $limit) < $total_count;
+    }
+
+    sendSuccess('받은 후기 목록 조회 성공', $response);
 
 } catch (PDOException $error) {
     sendError('받은 후기 조회 중 오류가 발생했습니다: ' . $error->getMessage(), 500);

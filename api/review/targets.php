@@ -60,7 +60,7 @@ try {
     //    QR이 아직 생성되지 않았다면 인증자 집합이 존재할 수 없음
     //    → is_eligible=false, targets=[] 로 즉시 응답
     // ─────────────────────────────────────────────
-    $qr_query = "SELECT qr.qr_id, qr.host_credited, m.meeting_host_id
+    $qr_query = "SELECT qr.qr_id, qr.host_credited, m.meeting_host_id, m.meeting_type
                   FROM meeting_qr_codes qr
                   JOIN meetings m ON m.meeting_id = qr.meeting_id
                   WHERE qr.meeting_id = :meeting_id";
@@ -80,6 +80,7 @@ try {
     $qr_id         = intval($qr_info['qr_id']);
     $host_credited = intval($qr_info['host_credited']);
     $host_id       = intval($qr_info['meeting_host_id']);
+    $meeting_type  = $qr_info['meeting_type'];
 
     // ─────────────────────────────────────────────
     // 2. 인증자 집합 구성 (is_eligible 판정에만 사용)
@@ -119,14 +120,26 @@ try {
     //
     //    QR 인증 여부는 이 단계에서 고려하지 않음.
     //    불참한(QR 미인증) 사람도 승인 참여자라면 리뷰 대상이 됨.
+    //
+    //    체험단(meeting_type='체험단')에 한해서는, 승인 후 취소한
+    //    사람(campaign_cancel.php로 노쇼 처리된 경우, approved_at IS NOT NULL)도
+    //    포함한다 — 대기 중 자진 취소(approved_at NULL)는 제외.
     // ─────────────────────────────────────────────
     $participant_query = "SELECT user_id
                             FROM meeting_participants
                            WHERE meeting_id = :meeting_id
-                             AND participation_status = '승인'";
+                             AND (
+                               participation_status = '승인'
+                               OR (
+                                 :meeting_type = '체험단'
+                                 AND participation_status = '취소'
+                                 AND approved_at IS NOT NULL
+                               )
+                             )";
 
     $participant_stmt = $db->prepare($participant_query);
     $participant_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+    $participant_stmt->bindParam(':meeting_type', $meeting_type);
     $participant_stmt->execute();
 
     $reviewable_user_ids = [];

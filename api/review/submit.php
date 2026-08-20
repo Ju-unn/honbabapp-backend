@@ -35,7 +35,7 @@
  *      reviewee: 리뷰 가능 집합(승인된 참여자 + 호스트)에 속하는지 확인
  *   3. 중복 제출 사전 체크
  *   4. 트랜잭션: meeting_reviews INSERT + users.user_manner_score 가산
- * 점수 환산: rating(1~5) * 0.2  →  0.2 / 0.4 / 0.6 / 0.8 / 1.0
+ * 점수 환산: rating 1~2점은 가산 없음(0.0), 3~5점만 rating * 0.2 → 0.6 / 0.8 / 1.0
  */
  require_once '../config/database.php';
  require_once '../utils/response.php';
@@ -92,53 +92,91 @@ if ($db === null) {
 
 try {
     // ─────────────────────────────────────────────
-    // 2-A. QR 코드 정보 조회 — 인증자 집합 구성용
+    // 2-0. 모임 정보 조회 — QR 존재 여부와 무관하게 항상 필요
+    // ─────────────────────────────────────────────
+    $meeting_stmt = $db->prepare(
+        "SELECT meeting_host_id, meeting_type FROM meetings WHERE meeting_id = :meeting_id"
+    );
+    $meeting_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+    $meeting_stmt->execute();
+
+    if ($meeting_stmt->rowCount() === 0) {
+        sendError('존재하지 않는 모임입니다', 404);
+    }
+
+    $meeting_row  = $meeting_stmt->fetch(PDO::FETCH_ASSOC);
+    $host_id      = intval($meeting_row['meeting_host_id']);
+    $meeting_type = $meeting_row['meeting_type'];
+
+    // ─────────────────────────────────────────────
+    // 2-A. 노쇼 리뷰 여부 판별
     //
-    //      QR 자체가 없으면 아무도 인증한 사람이 없으므로
-    //      reviewer 가 인증자 집합에 속할 수 없음 → 즉시 거부
+    //      체험단에서 호스트가 "승인 후 취소"(campaign_cancel.php로 노쇼
+    //      처리된 참여자, approved_at IS NOT NULL)에게 남기는 리뷰는
+    //      QR 인증 검증을 건너뛴다 — 노쇼는 애초에 모임에 나타나지 않아
+    //      QR을 찍을 기회 자체가 없었으므로 QR 인증자 집합 요구가 성립하지 않음.
     // ─────────────────────────────────────────────
-    $qr_query = "SELECT qr.qr_id, qr.host_credited, m.meeting_host_id
-                  FROM meeting_qr_codes qr
-                  JOIN meetings m ON m.meeting_id = qr.meeting_id
-                  WHERE qr.meeting_id = :meeting_id";
-
-    $qr_stmt = $db->prepare($qr_query);
-    $qr_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
-    $qr_stmt->execute();
-
-    if ($qr_stmt->rowCount() === 0) {
-        sendError('QR 인증을 하지 않아 후기를 작성할 수 없습니다');
+    $is_noshow_review = false;
+    if ($reviewer_id === $host_id && $meeting_type === '체험단') {
+        $noshow_stmt = $db->prepare(
+            "SELECT 1 FROM meeting_participants
+              WHERE meeting_id = :meeting_id AND user_id = :reviewee_id
+                AND participation_status = '취소' AND approved_at IS NOT NULL"
+        );
+        $noshow_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+        $noshow_stmt->bindParam(':reviewee_id', $reviewee_id, PDO::PARAM_INT);
+        $noshow_stmt->execute();
+        $is_noshow_review = $noshow_stmt->rowCount() > 0;
     }
 
-    $qr_info       = $qr_stmt->fetch(PDO::FETCH_ASSOC);
-    $qr_id         = intval($qr_info['qr_id']);
-    $host_credited = intval($qr_info['host_credited']);
-    $host_id       = intval($qr_info['meeting_host_id']);
+    if (!$is_noshow_review) {
+        // ─────────────────────────────────────────────
+        // QR 코드 정보 조회 — 인증자 집합 구성용
+        //
+        //      QR 자체가 없으면 아무도 인증한 사람이 없으므로
+        //      reviewer 가 인증자 집합에 속할 수 없음 → 즉시 거부
+        // ─────────────────────────────────────────────
+        $qr_query = "SELECT qr.qr_id, qr.host_credited
+                      FROM meeting_qr_codes qr
+                      WHERE qr.meeting_id = :meeting_id";
 
-    // ─────────────────────────────────────────────
-    // 2-B. 인증자 집합 구성 (reviewer 검증용)
-    //      = meeting_qr_scans(qr_id) user_id 전체
-    //        + (host_credited=1 이면 meeting_host_id)
-    // ─────────────────────────────────────────────
-    $scan_query = "SELECT user_id FROM meeting_qr_scans WHERE qr_id = :qr_id";
-    $scan_stmt  = $db->prepare($scan_query);
-    $scan_stmt->bindParam(':qr_id', $qr_id, PDO::PARAM_INT);
-    $scan_stmt->execute();
+        $qr_stmt = $db->prepare($qr_query);
+        $qr_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+        $qr_stmt->execute();
 
-    $verified_user_ids = [];
-    while ($row = $scan_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $verified_user_ids[] = intval($row['user_id']);
-    }
+        if ($qr_stmt->rowCount() === 0) {
+            sendError('QR 인증을 하지 않아 후기를 작성할 수 없습니다');
+        }
 
-    if ($host_credited === 1 && !in_array($host_id, $verified_user_ids, true)) {
-        $verified_user_ids[] = $host_id;
-    }
+        $qr_info       = $qr_stmt->fetch(PDO::FETCH_ASSOC);
+        $qr_id         = intval($qr_info['qr_id']);
+        $host_credited = intval($qr_info['host_credited']);
 
-    // ─────────────────────────────────────────────
-    // 2-C. reviewer 검증 — QR 인증자여야 후기 작성 가능
-    // ─────────────────────────────────────────────
-    if (!in_array($reviewer_id, $verified_user_ids, true)) {
-        sendError('QR 인증을 하지 않아 후기를 작성할 수 없습니다');
+        // ─────────────────────────────────────────────
+        // 인증자 집합 구성 (reviewer 검증용)
+        //      = meeting_qr_scans(qr_id) user_id 전체
+        //        + (host_credited=1 이면 meeting_host_id)
+        // ─────────────────────────────────────────────
+        $scan_query = "SELECT user_id FROM meeting_qr_scans WHERE qr_id = :qr_id";
+        $scan_stmt  = $db->prepare($scan_query);
+        $scan_stmt->bindParam(':qr_id', $qr_id, PDO::PARAM_INT);
+        $scan_stmt->execute();
+
+        $verified_user_ids = [];
+        while ($row = $scan_stmt->fetch(PDO::FETCH_ASSOC)) {
+            $verified_user_ids[] = intval($row['user_id']);
+        }
+
+        if ($host_credited === 1 && !in_array($host_id, $verified_user_ids, true)) {
+            $verified_user_ids[] = $host_id;
+        }
+
+        // ─────────────────────────────────────────────
+        // reviewer 검증 — QR 인증자여야 후기 작성 가능
+        // ─────────────────────────────────────────────
+        if (!in_array($reviewer_id, $verified_user_ids, true)) {
+            sendError('QR 인증을 하지 않아 후기를 작성할 수 없습니다');
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -147,14 +185,26 @@ try {
     //
     //      QR 인증 여부와 무관하게, 모임에 승인된 사람이라면
     //      모두 리뷰 대상이 된다. (노쇼/불참자도 포함)
+    //
+    //      체험단(meeting_type='체험단')에 한해서는, 승인 후 취소한
+    //      사람(campaign_cancel.php로 노쇼 처리된 경우, approved_at IS NOT NULL)도
+    //      포함한다 — 대기 중 자진 취소(approved_at NULL)는 제외.
     // ─────────────────────────────────────────────
     $participant_query = "SELECT user_id
                             FROM meeting_participants
                            WHERE meeting_id = :meeting_id
-                             AND participation_status = '승인'";
+                             AND (
+                               participation_status = '승인'
+                               OR (
+                                 :meeting_type = '체험단'
+                                 AND participation_status = '취소'
+                                 AND approved_at IS NOT NULL
+                               )
+                             )";
 
     $participant_stmt = $db->prepare($participant_query);
     $participant_stmt->bindParam(':meeting_id', $meeting_id, PDO::PARAM_INT);
+    $participant_stmt->bindParam(':meeting_type', $meeting_type);
     $participant_stmt->execute();
 
     $reviewable_user_ids = [];
@@ -226,8 +276,9 @@ try {
 
     $review_id = intval($db->lastInsertId());
 
-    // 매너점수 누적 가산: rating(1~5) * 0.2
-    $manner_score_added = $rating * 0.2;
+    // 매너점수 누적 가산: rating 3~5점만 가산(rating * 0.2), 1~2점(낮은 평가)은 가산 없음(0.0)
+    // — 낮은 별점이 오히려 점수를 올려버리는 걸 방지 (노쇼 리뷰 등 벌점 의도가 있는 경우 대비)
+    $manner_score_added = $rating <= 2 ? 0.0 : $rating * 0.2;
 
     $update_query = "UPDATE users
                         SET user_manner_score = user_manner_score + :score

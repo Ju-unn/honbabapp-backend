@@ -93,6 +93,22 @@ async function assertActiveRoomMember(socket, roomId, claimedUserId) {
   return rows.length > 0;
 }
 
+// 1:1(direct) 방인데 상대방이 탈퇴/나가서 나 혼자만 남았으면 더 보낼 대상이 없다.
+// 읽음 처리(read)는 과거 대화 확인용이라 막을 이유가 없어서 message 전송에만 건다.
+async function isRoomStillSendable(roomId) {
+  const [rows] = await pool.execute(
+    `SELECT cr.room_type,
+            (SELECT COUNT(*) FROM chat_room_members m WHERE m.room_id = cr.room_id) AS member_count
+     FROM chat_rooms cr
+     WHERE cr.room_id = ?
+     LIMIT 1`,
+    [roomId],
+  );
+
+  if (rows.length === 0) return false;
+  return !(rows[0].room_type === 'direct' && rows[0].member_count < 2);
+}
+
 // ═══════════════════════════════════════════════════════════════
 //   FCM 푸시 발송 헬퍼
 //
@@ -479,7 +495,21 @@ io.on('connection', (socket) => {
 
     if (!(await assertActiveRoomMember(socket, room_id, user_id))) {
       console.warn(`message 거부: room=${room_id} user=${user_id} (멤버 아님/탈퇴/신원불일치)`);
-      socket.emit('message_error', { content: '메시지를 보낼 권한이 없습니다' });
+      socket.emit('message_error', {
+        room_id,
+        client_msg_id: data.client_msg_id ?? null,
+        content: '메시지를 보낼 권한이 없습니다',
+      });
+      return;
+    }
+
+    if (!(await isRoomStillSendable(room_id))) {
+      console.warn(`message 거부: room=${room_id} (1:1 상대방 없음)`);
+      socket.emit('message_error', {
+        room_id,
+        client_msg_id: data.client_msg_id ?? null,
+        content: '상대방이 나간 채팅방이라 메시지를 보낼 수 없습니다',
+      });
       return;
     }
 
@@ -520,19 +550,20 @@ io.on('connection', (socket) => {
     );
 
     try {
-      // 발신 시점 닉네임/프로필 사진을 메시지에 그대로 박제해둔다.
-      // (나중에 발신자가 닉네임을 바꾸거나 탈퇴 후 재가입해도 이 메시지의
-      //  표시값은 안 바뀌게 하기 위함 — messages.php 조회 때 이 스냅샷을 씀)
+      // sender_nickname_snapshot/sender_profile_image_snapshot 은 여기서 안 채운다.
+      // 그 방 멤버로 있는 동안은 messages.php가 live join으로 최신 닉네임을 보여주고,
+      // 방을 나가는 시점(leave.php/kick.php/delete_account.php)에 그 사람이 그 방에
+      // 보낸 메시지 전체를 일괄로 스냅샷 고정한다 — 메시지 보낼 때마다 매번 찍으면
+      // 활성 유저가 닉네임을 여러 번 바꿨을 때 옛 메시지마다 다른 닉네임이 뒤섞여 보이는
+      // 문제가 있었음.
       const [userRows] = await pool.execute(
         'SELECT user_nickname, user_profile_image FROM users WHERE user_id = ?',
         [data.user_id],
       );
-      const senderNicknameSnapshot = userRows[0]?.user_nickname ?? null;
-      const senderProfileImageSnapshot = userRows[0]?.user_profile_image ?? null;
 
       // 1) INSERT — image_url 컬럼까지 채워넣음
       const [result] = await pool.execute(
-        'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, image_url, image_urls, sender_nickname_snapshot, sender_profile_image_snapshot, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())',
+        'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, image_url, image_urls, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
         [
           data.room_id,
           data.user_id,
@@ -540,8 +571,6 @@ io.on('connection', (socket) => {
           contentForDB,
           image_url,
           image_urls,
-          senderNicknameSnapshot,
-          senderProfileImageSnapshot,
         ],
       );
 

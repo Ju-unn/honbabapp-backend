@@ -3,6 +3,7 @@ require_once '../config/database.php';
 require_once '../utils/response.php';
 require_once '../config/s3_config.php';
 require_once '../utils/jwt.php';
+require_once '../utils/socket_emit.php';
  
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendError('POST 요청만 허용됩니다', 405);
@@ -119,6 +120,15 @@ try {
     $stmtC->bindParam(':user_id', $user_id, PDO::PARAM_INT);
     $stmtC->execute();
 
+    // 탈퇴 처리로 닉네임이 NULL 되기 전에, 실시간 알림(member_left) payload용으로 미리 떠둔다
+    $nicknameStmt = $db->prepare("SELECT user_nickname FROM users WHERE user_id = :user_id");
+    $nicknameStmt->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+    $nicknameStmt->execute();
+    $leaving_nickname = $nicknameStmt->fetchColumn() ?: '탈퇴한 유저';
+
+    // 커밋 후 emit할 이벤트를 여기 모아뒀다가 트랜잭션 밖에서 best-effort로 쏜다
+    $host_changed_events = [];
+
     // ── 채팅 정리 ─────────────────────────────────
     // (1) 내가 방장(owner_id)인 group 채팅방 처리
     //     leave.php 호스트 나가기와 같은 정책:
@@ -136,7 +146,7 @@ try {
     $owned_rooms = $ownedRoomsStmt->fetchAll(PDO::FETCH_COLUMN);
 
     $candidateStmt = $db->prepare("
-        SELECT crm.user_id
+        SELECT crm.user_id, u.user_nickname
         FROM chat_room_members crm
         JOIN users u ON crm.user_id = u.user_id
         WHERE crm.room_id = :room_id AND crm.user_id != :user_id
@@ -146,11 +156,18 @@ try {
 
     foreach ($owned_rooms as $owned_room_id) {
         $candidateStmt->execute([':room_id' => $owned_room_id, ':user_id' => $user_id]);
-        $new_owner_id = $candidateStmt->fetchColumn();
+        $candidate = $candidateStmt->fetch(PDO::FETCH_ASSOC);
+        $new_owner_id = $candidate ? $candidate['user_id'] : null;
 
         if ($new_owner_id) {
             $stmt = $db->prepare("UPDATE chat_rooms SET owner_id = ? WHERE room_id = ?");
             $stmt->execute([intval($new_owner_id), $owned_room_id]);
+
+            $host_changed_events[] = [
+                'room_id'      => $owned_room_id,
+                'new_host_id'  => intval($new_owner_id),
+                'new_nickname' => $candidate['user_nickname'],
+            ];
         } else {
             // 나 혼자 남은 방 → 통째 정리 (leave.php와 동일한 FK 순서:
             // chat_message_reads → chat_messages → chat_room_members → chat_rooms)
@@ -170,6 +187,30 @@ try {
             $stmt = $db->prepare("DELETE FROM chat_rooms WHERE room_id = ?");
             $stmt->execute([$owned_room_id]);
         }
+    }
+
+    // 지금 시점(멤버십 삭제 직전) 기준으로 내가 속한 방 목록을 미리 떠둔다
+    // → member_left 알림 대상 (커밋 후 remaining 재조회해서 emit)
+    $remainingRoomsStmt = $db->prepare("SELECT room_id FROM chat_room_members WHERE user_id = :user_id");
+    $remainingRoomsStmt->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+    $remainingRoomsStmt->execute();
+    $rooms_to_notify = $remainingRoomsStmt->fetchAll(PDO::FETCH_COLUMN);
+
+    // 탈퇴는 leave.php/kick.php와 달리 익명화한다 — 실제 닉네임/사진 대신
+    // 고정값 '탈퇴한 유저'/NULL을 그 방에 내가 보낸 메시지 전체에 박아넣는다.
+    // (복구해도 이 방들엔 재초대되기 전까진 계속 "탈퇴한 유저"로 남음.
+    //  재초대되면 messages.php가 live join으로 우선 표시하니 자동으로 실시간 값으로 바뀜)
+    $snapshotBackfillStmt = $db->prepare("
+        UPDATE chat_messages
+        SET sender_nickname_snapshot = '탈퇴한 유저',
+            sender_profile_image_snapshot = NULL
+        WHERE room_id = :room_id AND sender_id = :user_id
+    ");
+    foreach ($rooms_to_notify as $notify_room_id) {
+        $snapshotBackfillStmt->execute([
+            ':room_id' => $notify_room_id,
+            ':user_id' => $user_id,
+        ]);
     }
 
     // (2) 모든 채팅방 멤버십 제거 (유령 멤버 방지 —
@@ -207,6 +248,27 @@ try {
     }
 
     $db->commit();
+
+    // ── WebSocket broadcast (트랜잭션 밖, best-effort) ──
+    // leave.php와 동일하게: 실패해도 탈퇴 응답 자체엔 영향 없음.
+    // 열려있는 채팅방 화면(입력창 막기, "N명" 인원수 등)이 실시간으로 갱신되게.
+    foreach ($host_changed_events as $event) {
+        emit_to_room($event['room_id'], 'host_changed', $event);
+    }
+
+    $remainingCountStmt = $db->prepare("SELECT COUNT(*) FROM chat_room_members WHERE room_id = ?");
+    foreach ($rooms_to_notify as $notify_room_id) {
+        $remainingCountStmt->execute([$notify_room_id]);
+        $remaining = intval($remainingCountStmt->fetchColumn());
+
+        emit_to_room($notify_room_id, 'member_left', [
+            'room_id'   => $notify_room_id,
+            'user_id'   => $user_id,
+            'nickname'  => $leaving_nickname,
+            'remaining' => $remaining,
+        ]);
+    }
+
     sendSuccess('계정이 탈퇴 처리되었습니다');
 
 } catch (PDOException $e) {

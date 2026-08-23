@@ -68,7 +68,7 @@ if (!$db) {
 try {
     // 멤버 + 닉네임 확인
     $stmt = $db->prepare("
-        SELECT u.user_nickname AS nickname
+        SELECT u.user_nickname AS nickname, u.user_profile_image AS profile_image
         FROM chat_room_members crm
         INNER JOIN users u ON crm.user_id = u.user_id
         WHERE crm.room_id = ? AND crm.user_id = ?
@@ -79,6 +79,7 @@ try {
         sendError('채팅방 멤버가 아닙니다');
     }
     $nickname = $member['nickname'];
+    $profile_image = $member['profile_image'];
 
     // ───────────────────────────────────────
     // 3) 트랜잭션 시작
@@ -103,7 +104,7 @@ try {
     // ROUTE A : direct 방 — 위임/패널티/모임처리 없음
     // ═══════════════════════════════════════════════════════
     if ($room['room_type'] === 'direct') {
-        $result = handle_direct_leave($db, $room_id, $user_id, $nickname);
+        $result = handle_direct_leave($db, $room_id, $user_id, $nickname, $profile_image);
         $db->commit();
 
         // direct는 broadcast 안 함 (1:1이라 상대방 한 명에게 알릴 필요는 있지만,
@@ -269,6 +270,14 @@ try {
         $stmt = $db->prepare("DELETE FROM chat_room_members WHERE room_id = ? AND user_id = ?");
         $stmt->execute([$room_id, $user_id]);
 
+        // 나가는 시점 닉네임/사진으로 이 방에 보낸 메시지 전체를 고정 (messages.php가 사용)
+        $stmt = $db->prepare("
+            UPDATE chat_messages
+            SET sender_nickname_snapshot = ?, sender_profile_image_snapshot = ?
+            WHERE room_id = ? AND sender_id = ?
+        ");
+        $stmt->execute([$nickname, $profile_image, $room_id, $user_id]);
+
         // 6-4) 시스템 메시지 INSERT
         //   - 호스트 위임 발생 → 두 줄 ("○○님이 새 방장이 되었습니다." + "○○님이 나갔습니다.")
         //   - 일반 참여자/위임 없는 호스트 → 한 줄 ("○○님이 나갔습니다.")
@@ -430,7 +439,7 @@ function calculate_penalty($meeting_date) {
  *   - 위임/패널티/모임 처리 없음
  *   - 멤버 삭제 + 남은 멤버 0 이면 방 전체 삭제, 아니면 시스템 메시지
  */
-function handle_direct_leave($db, $room_id, $user_id, $nickname) {
+function handle_direct_leave($db, $room_id, $user_id, $nickname, $profile_image) {
     // 멤버 삭제
     $stmt = $db->prepare("DELETE FROM chat_room_members WHERE room_id = ? AND user_id = ?");
     $stmt->execute([$room_id, $user_id]);
@@ -443,6 +452,7 @@ function handle_direct_leave($db, $room_id, $user_id, $nickname) {
     $room_deleted = false;
 
     if ($remaining === 0) {
+        // 방 자체가 통째로 삭제되므로(아래) 메시지 스냅샷 고정은 의미 없음 — 생략
         // 방 전체 삭제
         $stmt = $db->prepare("
             DELETE cmr FROM chat_message_reads cmr
@@ -459,6 +469,14 @@ function handle_direct_leave($db, $room_id, $user_id, $nickname) {
 
         $room_deleted = true;
     } else {
+        // 나가는 시점 닉네임/사진으로 이 방에 보낸 메시지 전체를 고정 (messages.php가 사용)
+        $stmt = $db->prepare("
+            UPDATE chat_messages
+            SET sender_nickname_snapshot = ?, sender_profile_image_snapshot = ?
+            WHERE room_id = ? AND sender_id = ?
+        ");
+        $stmt->execute([$nickname, $profile_image, $room_id, $user_id]);
+
         // 시스템 메시지
         $msg = $nickname . '님이 나갔습니다.';
         $stmt = $db->prepare("

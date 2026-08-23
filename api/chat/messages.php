@@ -61,8 +61,14 @@ try {
             cm.message_id,
             cm.room_id,
             cm.sender_id,
-            CASE WHEN u.user_status = '탈퇴' THEN NULL ELSE cm.sender_nickname_snapshot END AS sender_name,
-            CASE WHEN u.user_status = '탈퇴' THEN NULL ELSE cm.sender_profile_image_snapshot END AS sender_profile_image,
+            CASE
+                WHEN crm.id IS NOT NULL THEN u.user_nickname
+                ELSE cm.sender_nickname_snapshot
+            END AS sender_name,
+            CASE
+                WHEN crm.id IS NOT NULL THEN u.user_profile_image
+                ELSE cm.sender_profile_image_snapshot
+            END AS sender_profile_image,
             cm.msg_type,
             cm.content,
             cm.image_url,
@@ -72,9 +78,14 @@ try {
                 SELECT COUNT(*)
                 FROM chat_message_reads cmr
                 WHERE cmr.message_id = cm.message_id
+                  AND EXISTS (
+                      SELECT 1 FROM chat_room_members crm2
+                      WHERE crm2.room_id = cm.room_id AND crm2.user_id = cmr.user_id
+                  )
             ) as read_count
         FROM chat_messages cm
         LEFT JOIN users u ON cm.sender_id = u.user_id
+        LEFT JOIN chat_room_members crm ON crm.room_id = cm.room_id AND crm.user_id = cm.sender_id
         WHERE cm.room_id = ?
         ORDER BY cm.message_id DESC
         LIMIT $limit OFFSET $offset
@@ -88,9 +99,12 @@ try {
         $msg['room_id']    = intval($msg['room_id']);
         $msg['sender_id']  = $msg['sender_id'] ? intval($msg['sender_id']) : null;
 
-        // 탈퇴한 발신자 처리: sender_id는 있는데 현재 계정 상태가 탈퇴면
-        // (위 CASE에서 스냅샷을 NULL로 덮어씀) → "탈퇴한 유저"로 표시.
-        // 탈퇴가 아니라 단순히 방을 나간 경우엔 닉네임/사진 스냅샷이 그대로 남는다.
+        // 발신자 닉네임/사진 표시 규칙 (위 CASE):
+        //   - 지금도 이 방 멤버 → 실시간(live) 닉네임/사진 (닉네임 바꿔도 항상 최신으로 통일,
+        //     탈퇴했다 재초대돼도 이 조건이 이겨서 자동으로 실시간 값으로 전환됨)
+        //   - 방을 나가서 지금 멤버가 아님 → 나가는 시점에 고정된 스냅샷.
+        //     나가기/강퇴는 실제 닉네임/사진, 계정 탈퇴는 delete_account.php가 애초에
+        //     스냅샷 자체를 '탈퇴한 유저'/NULL로 박아뒀으므로 여기선 그냥 그대로 씀
         // 시스템 메시지(sender_id NULL)는 발신자가 없는 게 정상이므로 제외
         if ($msg['sender_id'] !== null
             && ($msg['sender_name'] === null || $msg['sender_name'] === '')) {

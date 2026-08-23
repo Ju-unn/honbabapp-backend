@@ -127,7 +127,7 @@ try {
     // 4) 대상자가 실제로 방에 있는지 + 닉네임 조회
     // ───────────────────────────────────────
     $stmt = $db->prepare("
-        SELECT u.user_nickname AS nickname
+        SELECT u.user_nickname AS nickname, u.user_profile_image AS profile_image
         FROM chat_room_members crm
         INNER JOIN users u ON crm.user_id = u.user_id
         WHERE crm.room_id = ? AND crm.user_id = ?
@@ -140,6 +140,7 @@ try {
         sendError('대상자가 채팅방에 없습니다');
     }
     $target_nickname = $target['nickname'];
+    $target_profile_image = $target['profile_image'];
 
     // ───────────────────────────────────────
     // 5) meeting_participants 상태를 '강퇴' 로 변경
@@ -186,6 +187,14 @@ try {
         DELETE FROM chat_room_members WHERE room_id = ? AND user_id = ?
     ");
     $stmt->execute([$room_id, $target_user_id]);
+
+    // 강퇴 시점 닉네임/사진으로 이 방에 보낸 메시지 전체를 고정 (messages.php가 사용)
+    $stmt = $db->prepare("
+        UPDATE chat_messages
+        SET sender_nickname_snapshot = ?, sender_profile_image_snapshot = ?
+        WHERE room_id = ? AND sender_id = ?
+    ");
+    $stmt->execute([$target_nickname, $target_profile_image, $room_id, $target_user_id]);
 
     // ───────────────────────────────────────
     // 9) 시스템 메시지 INSERT

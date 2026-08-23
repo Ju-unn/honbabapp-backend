@@ -18,6 +18,7 @@ if (empty($input['provider'])) {
 
 $provider = trim($input['provider']);
 $credential = trim($input['access_token'] ?? $input['id_token'] ?? '');
+$confirm_restore = !empty($input['confirm_restore']);
 
 if (empty($credential)) {
     sendError('access_token 또는 id_token이 필요합니다');
@@ -175,8 +176,15 @@ try {
     $user['user_email_verified'] = (bool)$user['user_email_verified'];
 
     // 계정 상태 확인
-    // '탈퇴'는 즉시 복원: provider가 본인을 보증하므로 이메일 인증 절차가 불필요하고,
-    // 에러로 막으면 소셜 사용자는 복원 경로가 아예 없음 (register.php의 이메일 복원과 대칭)
+    // '탈퇴'는 provider가 본인을 보증하므로 이메일 인증 절차 없이 복원 가능하지만,
+    // 사용자 동의 없이 조용히 복원하지 않는다 — 1차 호출은 복원 여부만 물어보고,
+    // confirm_restore=true로 재호출해야 실제 복원을 진행한다.
+    if ($user['user_status'] === '탈퇴' && !$confirm_restore) {
+        // 이 트랜잭션에서 새로 연결했을 수 있는 social_accounts 등도 함께 취소
+        $db->rollBack();
+        sendResponse(false, '탈퇴한 계정입니다. 복구하시겠습니까?', ['restore_required' => true]);
+    }
+
     if ($user['user_status'] === '탈퇴') {
         // 소셜에서 검증된 이메일이 다른 계정에서 사용 중이 아니면 함께 복구
         $restore_email = null;

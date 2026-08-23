@@ -67,6 +67,33 @@ async function fanOutToRoom(room_id, event, payload) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//   assertActiveRoomMember — message/read 이벤트 공통 권한 체크
+//
+//   지금까지는 소켓이 보낸 data.user_id를 그대로 믿고 DB에 쓰거나
+//   fan-out했음 (로그인 때만 JWT로 신원 확인, 이후 이벤트는 무검증).
+//   그래서 (1) 로그인한 소켓으로 남의 user_id를 실어 보내는 스푸핑,
+//   (2) 탈퇴한 계정이 만료 전 토큰으로 계속 메시지를 보내는 문제가
+//   둘 다 가능했음. 여기서 한 번에 막는다:
+//     - claimedUserId가 로그인 때 검증된 socket.data.userId와 같은지
+//     - 그 user가 이 room의 현재 멤버이면서 계정이 활성 상태인지
+// ═══════════════════════════════════════════════════════════════
+async function assertActiveRoomMember(socket, roomId, claimedUserId) {
+  if (!roomId || !claimedUserId || claimedUserId !== socket.data.userId) {
+    return false;
+  }
+
+  const [rows] = await pool.execute(
+    `SELECT 1 FROM chat_room_members crm
+     JOIN users u ON u.user_id = crm.user_id
+     WHERE crm.room_id = ? AND crm.user_id = ? AND u.user_status = '활성'
+     LIMIT 1`,
+    [roomId, claimedUserId],
+  );
+
+  return rows.length > 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
 //   FCM 푸시 발송 헬퍼
 //
 //   buildFcmDataPayload({type, title, body, data})
@@ -447,6 +474,15 @@ io.on('connection', (socket) => {
   //   이미지: { room_id, user_id, msg_type: 'image', image_url: 'https://...', content: '사진' }
   //
   socket.on('message', async (data) => {
+    const room_id = parseInt(data.room_id);
+    const user_id = parseInt(data.user_id);
+
+    if (!(await assertActiveRoomMember(socket, room_id, user_id))) {
+      console.warn(`message 거부: room=${room_id} user=${user_id} (멤버 아님/탈퇴/신원불일치)`);
+      socket.emit('message_error', { content: '메시지를 보낼 권한이 없습니다' });
+      return;
+    }
+
     // msg_type 기본값 'text'
     const msg_type = data.msg_type === 'image' ? 'image' : 'text';
 
@@ -484,9 +520,19 @@ io.on('connection', (socket) => {
     );
 
     try {
+      // 발신 시점 닉네임/프로필 사진을 메시지에 그대로 박제해둔다.
+      // (나중에 발신자가 닉네임을 바꾸거나 탈퇴 후 재가입해도 이 메시지의
+      //  표시값은 안 바뀌게 하기 위함 — messages.php 조회 때 이 스냅샷을 씀)
+      const [userRows] = await pool.execute(
+        'SELECT user_nickname, user_profile_image FROM users WHERE user_id = ?',
+        [data.user_id],
+      );
+      const senderNicknameSnapshot = userRows[0]?.user_nickname ?? null;
+      const senderProfileImageSnapshot = userRows[0]?.user_profile_image ?? null;
+
       // 1) INSERT — image_url 컬럼까지 채워넣음
       const [result] = await pool.execute(
-        'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, image_url, image_urls, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
+        'INSERT INTO chat_messages (room_id, sender_id, msg_type, content, image_url, image_urls, sender_nickname_snapshot, sender_profile_image_snapshot, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())',
         [
           data.room_id,
           data.user_id,
@@ -494,17 +540,14 @@ io.on('connection', (socket) => {
           contentForDB,
           image_url,
           image_urls,
+          senderNicknameSnapshot,
+          senderProfileImageSnapshot,
         ],
       );
 
       const [rows] = await pool.execute(
         'SELECT created_at FROM chat_messages WHERE message_id = ?',
         [result.insertId],
-      );
-
-      const [userRows] = await pool.execute(
-        'SELECT user_nickname, user_profile_image FROM users WHERE user_id = ?',
-        [data.user_id],
       );
 
       const [memberRows] = await pool.execute(
@@ -563,6 +606,14 @@ io.on('connection', (socket) => {
   // 읽음 처리
   socket.on('read', async (data) => {
     console.log('읽음 처리 room:' + data.room_id + ' user:' + data.user_id);
+
+    const room_id = parseInt(data.room_id);
+    const user_id = parseInt(data.user_id);
+
+    if (!(await assertActiveRoomMember(socket, room_id, user_id))) {
+      console.warn(`read 거부: room=${room_id} user=${user_id} (멤버 아님/탈퇴/신원불일치)`);
+      return;
+    }
 
     try {
       const [unreadMessages] = await pool.execute(

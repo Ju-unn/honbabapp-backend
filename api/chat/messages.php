@@ -61,8 +61,8 @@ try {
             cm.message_id,
             cm.room_id,
             cm.sender_id,
-            u.user_nickname AS sender_name,
-            u.user_profile_image AS sender_profile_image,
+            CASE WHEN u.user_status = '탈퇴' THEN NULL ELSE cm.sender_nickname_snapshot END AS sender_name,
+            CASE WHEN u.user_status = '탈퇴' THEN NULL ELSE cm.sender_profile_image_snapshot END AS sender_profile_image,
             cm.msg_type,
             cm.content,
             cm.image_url,
@@ -88,12 +88,14 @@ try {
         $msg['room_id']    = intval($msg['room_id']);
         $msg['sender_id']  = $msg['sender_id'] ? intval($msg['sender_id']) : null;
 
-        // 탈퇴한 발신자 처리: sender_id는 있는데 닉네임이 NULL/빈값이면
-        // (탈퇴 시 user_nickname = NULL 처리됨) → "탈퇴한 유저"로 표시
+        // 탈퇴한 발신자 처리: sender_id는 있는데 현재 계정 상태가 탈퇴면
+        // (위 CASE에서 스냅샷을 NULL로 덮어씀) → "탈퇴한 유저"로 표시.
+        // 탈퇴가 아니라 단순히 방을 나간 경우엔 닉네임/사진 스냅샷이 그대로 남는다.
         // 시스템 메시지(sender_id NULL)는 발신자가 없는 게 정상이므로 제외
         if ($msg['sender_id'] !== null
             && ($msg['sender_name'] === null || $msg['sender_name'] === '')) {
             $msg['sender_name'] = '탈퇴한 유저';
+            $msg['sender_profile_image'] = null;
         }
         // 안읽은 수 = 전체 멤버 수 - 읽은 수
         $msg['unread_count'] = ($member_count - 1) - intval($msg['read_count']);

@@ -3,6 +3,7 @@ const mysql = require('mysql2/promise');
 const cron = require('node-cron');
 const admin = require('firebase-admin');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 require('dotenv').config({ path: '/var/www/html/.env' });
 
 const pool = mysql.createPool({
@@ -816,5 +817,75 @@ cron.schedule('* * * * *', () => {
     console.error('[review-notice] 틱 전체 실패:', err.message);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+//   탈퇴 1년 경과 계정 개인정보 파기
+//
+//   users row 자체는 지우지 않는다 (매너점수/모임 이력/채팅/리뷰 등
+//   다른 테이블이 user_id를 참조하고 있어 hard delete하면 그 데이터까지 깨짐).
+//   남아있는 개인정보 컬럼만 NULL/임의값으로 덮어써서 파기 요건을 충족한다.
+//   매일 새벽 4시 1회 실행.
+// ═══════════════════════════════════════════════════════════════
+async function purgeWithdrawnPii() {
+  let targets;
+  try {
+    [targets] = await pool.execute(`
+      SELECT user_id FROM users
+      WHERE user_status = '탈퇴'
+        AND user_deleted_at <= (NOW() - INTERVAL 1 YEAR)
+        AND user_phone_number IS NOT NULL
+    `);
+  } catch (err) {
+    console.error('[purge-pii] 대상 조회 실패:', err.message);
+    return;
+  }
+
+  let purged_count = 0;
+  for (const { user_id } of targets) {
+    try {
+      // 로그인은 user_status 체크에서 이미 차단되므로 검증 가능한 해시 형식일 필요는 없음
+      const random_password = crypto.randomBytes(32).toString('hex');
+
+      const [result] = await pool.execute(
+        `UPDATE users SET
+            user_phone_number = NULL,
+            user_password = ?,
+            user_birthday = NULL,
+            user_gender = NULL,
+            user_location = NULL,
+            user_instagram_id = NULL,
+            user_blog_id = NULL,
+            user_youtube_id = NULL,
+            user_status_message = NULL,
+            user_withdrawn_email = NULL,
+            user_updated_at = NOW()
+         WHERE user_id = ? AND user_phone_number IS NOT NULL`,
+        [random_password, user_id],
+      );
+
+      if (result.affectedRows === 1) {
+        purged_count++;
+      }
+    } catch (err) {
+      console.error(`[purge-pii] user_id=${user_id} 처리 실패:`, err.message);
+    }
+  }
+
+  if (purged_count > 0) {
+    console.log(`[purge-pii] 개인정보 파기 완료: ${purged_count}건`);
+  }
+}
+
+// 매일 새벽 4시 실행 (KST), 틱 전체 실패해도 프로세스가 죽지 않도록 catch
+cron.schedule(
+  // '0 4 * * *',
+  '*/1 * * * *',
+  () => {
+    purgeWithdrawnPii().catch((err) => {
+      console.error('[purge-pii] 틱 전체 실패:', err.message);
+    });
+  },
+  { timezone: 'Asia/Seoul' },
+);
 
 console.log('[review-notice] node-cron 등록 완료 (1분 주기)');

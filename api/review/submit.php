@@ -280,8 +280,10 @@ try {
     // — 낮은 별점이 오히려 점수를 올려버리는 걸 방지 (노쇼 리뷰 등 벌점 의도가 있는 경우 대비)
     $manner_score_added = $rating <= 2 ? 0.0 : $rating * 0.2;
 
+    // 상한 100 고정. 하한(0)은 페널티 쪽에서 GREATEST(0, ...)로 이미 막아뒀으니 대칭으로 처리.
+    // (컬럼은 decimal(5,2)로 확장 필요 — decimal(3,2)는 최댓값 9.99라 100 자체를 저장 못 함)
     $update_query = "UPDATE users
-                        SET user_manner_score = user_manner_score + :score
+                        SET user_manner_score = LEAST(100, user_manner_score + :score)
                       WHERE user_id = :reviewee_id";
 
     $update_stmt = $db->prepare($update_query);

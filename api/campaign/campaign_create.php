@@ -96,6 +96,11 @@ if ($databaseConnection === null) {
     sendError('데이터베이스 연결에 실패했습니다', 500);
 }
 
+// ── rate limit: 대량 생성 스크립트 백스톱 (등록권 차감/트랜잭션 전에 검사) ──
+if (isMeetingCreateRateLimited($databaseConnection, $hostUserId)) {
+    sendError('요청이 너무 잦습니다. 잠시 후 다시 시도해주세요', 429);
+}
+
 try {
     $databaseConnection->beginTransaction();
 

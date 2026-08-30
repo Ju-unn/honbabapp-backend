@@ -15,7 +15,7 @@
 // 정상 유저는 60초 안에 모임을 5개씩 만들지 않으므로 오탐 없음. 필요 시 값만 조정.
 // ponytail: 고정 임계값. 유저별 편차가 문제되면 등급별 한도로 확장.
 const MEETING_CREATE_RATE_WINDOW_SECONDS = 60;
-const MEETING_CREATE_RATE_MAX            = 5;
+const MEETING_CREATE_RATE_MAX            = 2;
 
 /**
  * 최근 RATE_WINDOW초 안에 이 유저가 만든 모임(일반+체험단)이 RATE_MAX 이상이면
